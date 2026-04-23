@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<settings>
+  <category label="SIMKL">
+    <setting id="client_id"
+             type="text"
+             label="SIMKL Client ID (API Key)"
+             default=""/>
+    <setting id="show_posters"
+             type="bool"
+             label="Show posters (SIMKL images)"
+             default="true"/>
+    <setting id="access_token"
+             type="text"
+             label="SIMKL Access Token (auto)"
+             default=""
+             enable="false"/>
+    <setting id="debug_logging"
+             type="bool"
+             label="Debug logging (log raw SIMKL responses)"
+             default="false"/>
+  </category>
+
+  <category label="TMDB">
+    <setting id="tmdb_api_key"
+             type="text"
+             label="TMDB API Key (v3)"
+             default=""/>
+    <setting id="airdate_source"
+             type="enum"
+             label="Episode airdate source"
+             values="SIMKL|TMDB"
+             default="1"/>
+  </category>
+</settings>

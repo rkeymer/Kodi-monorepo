@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon
+    id="plugin.video.simkl.watching"
+    name="WhatsUpNext"
+    version="0.2.2"
+    provider-name="Personal">
+
+    <requires>
+        <import addon="xbmc.python" version="3.0.0"/>
+    </requires>
+
+    <extension
+        point="xbmc.python.pluginsource"
+        library="main.py">
+        <provides>video</provides>
+    </extension>
+
+    <extension point="xbmc.addon.metadata">
+        <summary>See what’s up next from your SIMKL Watching list</summary>
+        <description>
+WhatsUpNext shows:
+- New aired episodes you haven’t watched yet
+- Upcoming episodes (with air dates when TMDB is enabled)
+        </description>
+        <platform>all</platform>
+    </extension>
+
+</addon>

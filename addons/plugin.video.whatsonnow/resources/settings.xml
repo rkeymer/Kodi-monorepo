@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<settings>
+ <category label="Playlist">
+  <setting id="playlist_source" type="enum" label="Playlist source" values="Download (URL)|Local file" default="0" />
+  <setting id="base_url" type="text" label="Base server URL (no path)" default="" />
+  <setting id="username" type="text" label="Username" default="" />
+  <setting id="password" type="text" label="Password" default="" option="hidden" />
+  <setting id="m3u_path" type="text" label="M3U path" default="/get.php" />
+  <setting id="m3u_type" type="text" label="Playlist type (m3u or m3u_plus)" default="m3u_plus" />
+  <setting id="output" type="text" label="Output format (ts or m3u8)" default="ts" />
+  <setting id="playlist_timeout" type="number" label="Playlist fetch timeout (seconds)" default="600" />
+  <setting id="playlist_retries" type="number" label="Playlist fetch retries" default="3" />
+  <setting id="local_playlist_path" type="text" label="Local playlist file (.m3u)" default="special://profile/addon_data/plugin.video.whatsonnow/playlist.m3u" />
+ </category>
+ <category label="EPG">
+  <setting id="epg_enabled" type="bool" label="Enable EPG" default="true" />
+  <setting id="epg_source" type="enum" label="EPG source" values="Download (URL)|Local file" default="0" />
+  <setting id="epg_path" type="text" label="EPG path" default="/xmltv.php" />
+  <setting id="epg_timeout" type="number" label="EPG fetch timeout (seconds)" default="600" />
+  <setting id="epg_ttl" type="number" label="EPG cache TTL (minutes)" default="180" />
+  <setting id="epg_use_conditional_get" type="bool" label="Use conditional GET (ETag/Last-Modified)" default="true" />
+  <setting id="local_epg_path" type="text" label="Local EPG file (.xml)" default="special://profile/addon_data/plugin.video.whatsonnow/epg.xml" />
+ </category>
+ <category label="Personalization">
+  <setting id="recent_max" type="number" label="Max Recently Watched" default="50" />
+  <setting id="on_now_pinned_recent" type="number" label="Pinned recents on On Now" default="8" />
+  <setting id="coming_up_hours" type="number" label="Coming Up horizon (hours)" default="5" />
+ </category>
+ <category label="Filtering">
+  <setting id="drop_vod" type="bool" label="Drop VOD / series / movies" default="true" />
+  <setting id="include_groups" type="text" label="Include groups (comma-separated)" default="" />
+  <setting id="exclude_groups" type="text" label="Exclude groups (comma-separated)" default="Adult,XXX" />
+  <setting id="include_keywords" type="text" label="Include keywords (comma-separated)" default="" />
+  <setting id="exclude_keywords" type="text" label="Exclude keywords (comma-separated)" default="" />
+  <setting id="include_regex" type="text" label="Include regex (optional)" default="" />
+  <setting id="exclude_regex" type="text" label="Exclude regex (optional)" default="" />
+ </category>
+ <category label="Performance">
+<setting id="auto_update_enabled" type="bool" label="Auto-update local files" default="false" />
+<setting id="auto_update_mode" type="enum" label="Auto-update schedule" values="Once per day at time|Every X hours" default="1" />
+<setting id="auto_update_time" type="text" label="Daily update time (HH:MM, 24h)" default="02:00" visible="eq(-1,0)" />
+<setting id="auto_update_interval_hours" type="number" label="Update interval (hours)" default="6" visible="eq(-2,1)" />
+<setting id="auto_update_notify" type="bool" label="Notify during auto-update" default="true" />
+<setting id="cache_ttl" type="number" label="Playlist cache TTL (minutes)" default="10" />
+<setting id="page_size" type="number" label="Page size (items per page)" default="200" />
+<setting id="max_search_results" type="number" label="Max search results" default="200" />
+<setting id="debug_logging" type="bool" label="Enable WhatsOnNow debug logging" default="true" />
+</category>
+ <category label="Advanced">
+  <setting id="use_local_cache_files" type="bool" label="DEBUG: Use local cache files instead of web downloads" default="false" />
+  <setting id="local_cache_base_path" type="text" label="DEBUG: Local cache folder" default="C:\temp\KodiCache" />
+  <setting id="local_cache_playlist_file" type="text" label="DEBUG: Playlist cache filename" default="playlist-online.m3u" />
+  <setting id="local_cache_epg_file" type="text" label="DEBUG: EPG cache filename" default="epg-online.xml" />
+ </category>
+</settings>
