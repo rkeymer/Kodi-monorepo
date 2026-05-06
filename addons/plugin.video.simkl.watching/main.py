@@ -152,7 +152,7 @@ def _days_until(iso_yyyy_mm_dd):
 # --------------------------
 def build_homelander_url(action, imdb, tmdb, tvshowtitle, year, season=None):
     """
-    Builds a Homelander navigation URL based on what you captured in kodi.log
+    Builds a Homelander navigation URL based on what you captured in kodi.log.
     """
     params = {
         "action": action,
@@ -189,6 +189,16 @@ def open_homelander(params):
     tmdb = params.get("tmdb", "")
     year = params.get("year", "")
     nxt = params.get("next", "")  # e.g. "S01E03" (may be empty)
+    media_type = params.get("media_type", "tv")
+
+    if media_type == "movie":
+        name = f"{title} ({year})" if year else title
+        homelander_url = (
+            "plugin://plugin.video.homelander/?action=movieSearchterm&name="
+            + urllib.parse.quote(name)
+        )
+        xbmc.executebuiltin(f'ActivateWindow(10025,"{homelander_url}",return)')
+        return
 
     season = None
     episode = None
@@ -201,6 +211,7 @@ def open_homelander(params):
     else:
         homelander_url = build_homelander_url("seasons", imdb, tmdb, title, year)
 
+    xbmc.log(f"[SIMKL Watching] open_homelander series URL: {homelander_url}", xbmc.LOGINFO)
     xbmc.executebuiltin(f'ActivateWindow(10025,"{homelander_url}",return)')
 
     if episode is not None and season is not None:
@@ -220,9 +231,18 @@ def simkl_poster_url(poster_path, size_suffix="_m", ext=".webp"):
     return f"https://wsrv.nl/?url=https://simkl.in/posters/{poster_path}{size_suffix}{ext}"
 
 
+def tmdb_poster_url(poster_path, size_suffix="w342"):
+    """
+    Build a TMDB image URL for movie posters.
+    """
+    if not poster_path:
+        return None
+    return f"https://image.tmdb.org/t/p/{size_suffix}{poster_path}"
+
+
 # --------------------------
 # TMDB airdate helpers
-# --------------------------
+
 def use_tmdb_airdates(addon):
     """
     airdate_source enum in settings:
@@ -278,7 +298,8 @@ def show_main_menu():
     xbmcplugin.setPluginCategory(HANDLE, "WhatsUpNext")
     add_folder("New Episodes", "new", icon=f"{MEDIA_PATH}/new.png")
     add_folder("Upcoming Episodes", "upcoming", icon=f"{MEDIA_PATH}/upcoming.png")
-    add_folder("Authorize SIMKL", "auth", icon=f"{MEDIA_PATH}/auth.png")
+    add_folder("Movies", "movies", icon=f"{MEDIA_PATH}/movies.png")
+    add_folder("Search", "search_menu", icon=f"{MEDIA_PATH}/search.png")
     add_folder("Settings / Help", "help", icon=f"{MEDIA_PATH}/help.png")
     end_dir()
 
@@ -461,8 +482,8 @@ def show_upcoming():
             _, title, _, airdate, _ = row
             d = _parse_ymd_date(airdate)
             if d is None:
-                return (1, 0, title.lower())
-            return (0, -d.toordinal(), title.lower())
+                return (1, float("inf"), title.lower())
+            return (0, d.toordinal(), title.lower())
 
         rows.sort(key=_sort_key)
 
@@ -472,17 +493,15 @@ def show_upcoming():
             # Keep your existing label rules/countdown, just change ordering.
             d = _days_until(airdate)
 
-            if d is None:
+            if d is None or d < 0:
                 label = f"{title}"
+            elif d < 3:
+                target_d = _parse_ymd_date(airdate)
+                end_of_day = datetime(target_d.year, target_d.month, target_d.day, 23, 59, 59)
+                hours = int((end_of_day - datetime.now()).total_seconds() / 3600)
+                label = f"{title} — {hours} hours — ({airdate})"
             else:
-                if d < 0:
-                    label = f"{title}"
-                elif d == 0:
-                    label = f"{title} — today — ({airdate})"
-                elif d == 1:
-                    label = f"{title} — tomorrow — ({airdate})"
-                else:
-                    label = f"{title} — {d} days — ({airdate})"
+                label = f"{title} — {d} days — ({airdate})"
 
             art = None
             if show_posters:
@@ -500,8 +519,247 @@ def show_upcoming():
         end_dir()
 
 
+def show_movies():
+    xbmcplugin.setPluginCategory(HANDLE, "Movies")
+    addon = xbmcaddon.Addon()
+    api = SimklApi(addon)
+
+    if not api.is_authorized():
+        add_item("Not authorized. Run 'Authorize SIMKL' first.")
+        end_dir()
+        return
+
+    try:
+        data = api.get_plan_movies()
+        if addon.getSettingBool("debug_logging"):
+            xbmc.log(f"[SIMKL Watching] /sync/all-items/movies/plan FULL response: {data}", xbmc.LOGINFO)
+
+        movies = []
+        if isinstance(data, dict):
+            if isinstance(data.get("movies"), list):
+                movies = data["movies"]
+                if addon.getSettingBool("debug_logging"):
+                    xbmc.log(f"[SIMKL Watching] Extracted {len(movies)} movies from 'movies' key", xbmc.LOGINFO)
+            elif isinstance(data.get("items"), list):
+                movies = data["items"]
+                if addon.getSettingBool("debug_logging"):
+                    xbmc.log(f"[SIMKL Watching] Extracted {len(movies)} movies from 'items' key", xbmc.LOGINFO)
+            elif isinstance(data.get("data"), list):
+                movies = data["data"]
+                if addon.getSettingBool("debug_logging"):
+                    xbmc.log(f"[SIMKL Watching] Extracted {len(movies)} movies from 'data' key", xbmc.LOGINFO)
+        elif isinstance(data, list):
+            movies = data
+            if addon.getSettingBool("debug_logging"):
+                xbmc.log(f"[SIMKL Watching] Data is already a list with {len(movies)} items", xbmc.LOGINFO)
+
+        def _item_is_plan_movie(item):
+            if not isinstance(item, dict):
+                return False
+            status = item.get("status") or item.get("list")
+            if not status:
+                movie = item.get("movie") or item.get("film") or {}
+                status = movie.get("status") or movie.get("list")
+            if not status:
+                return False
+            return str(status).strip().lower() in (
+                "plan",
+                "plan to watch",
+                "planned",
+                "plan_to_watch",
+                "plantowatch",
+                "watchlist",
+            )
+
+        movies = [item for item in movies if _item_is_plan_movie(item)]
+        
+        if addon.getSettingBool("debug_logging"):
+            xbmc.log(f"[SIMKL Watching] After status filter: {len(movies)} movies remaining", xbmc.LOGINFO)
+            if movies:
+                xbmc.log(f"[SIMKL Watching] First movie for debug: {movies[0]}", xbmc.LOGINFO)
+
+        def _movie_like(item):
+            if not isinstance(item, dict):
+                return False
+            if item.get("movie") or item.get("film"):
+                return True
+            if item.get("title") or item.get("year") or item.get("ids"):
+                return True
+            return False
+
+        if not movies and isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, list) and any(_movie_like(x) for x in value):
+                    movies = value
+                    if addon.getSettingBool("debug_logging"):
+                        xbmc.log(f"[SIMKL Watching] fallback movie list from key={key}", xbmc.LOGINFO)
+                    break
+
+        if not movies:
+            add_item("No movies found in your SIMKL Plan to Watch list.")
+            end_dir()
+            return
+
+        def _extract_movie_object(item):
+            if not isinstance(item, dict):
+                return {}
+            movie = item.get("movie") or item.get("film") or item
+            if not isinstance(movie, dict):
+                return {}
+            return movie
+
+        movies = sorted(
+            movies,
+            key=lambda item: (_extract_movie_object(item).get("title", "").lower())
+        )
+        tmdb_enabled = use_tmdb_airdates(addon)
+        show_posters = addon.getSettingBool("show_posters")
+
+        for it in movies:
+            movie = _extract_movie_object(it)
+            ids = movie.get("ids") or {}
+
+            title = movie.get("title") or movie.get("name") or "Unknown title"
+            year = movie.get("year", "")
+            imdb_id = ids.get("imdb", "")
+            tmdb_id = ids.get("tmdb", "")
+            poster_path = movie.get("poster") or movie.get("poster_path")
+            overview = movie.get("overview") or movie.get("plot") or ""
+            release_date = movie.get("released") or movie.get("release_date") or ""
+
+            tmdb_art = None
+            if tmdb_enabled and tmdb_id:
+                try:
+                    details = TmdbApi(addon).movie_details(int(tmdb_id))
+                    if not overview:
+                        overview = details.get("overview") or overview
+                    if not release_date:
+                        release_date = details.get("release_date") or release_date
+                    tmdb_art = tmdb_poster_url(details.get("poster_path"))
+                except Exception as e:
+                    xbmc.log(f"[SIMKL Watching][TMDB] movie details lookup failed: {e}", xbmc.LOGERROR)
+
+            label = title
+            if year:
+                label = f"{title} ({year})"
+            if release_date and release_date != year:
+                label = f"{label} — {release_date}"
+
+            art = None
+            if show_posters:
+                if tmdb_art:
+                    art = {"thumb": tmdb_art, "poster": tmdb_art, "icon": tmdb_art}
+                else:
+                    url = simkl_poster_url(poster_path)
+                    if url:
+                        art = {"thumb": url, "poster": url, "icon": url}
+
+            info = {"title": title}
+            if year:
+                info["year"] = str(year)
+            if overview:
+                info["plot"] = overview
+
+            url = build_url(action="open_homelander", title=title, imdb=imdb_id, tmdb=tmdb_id, year=year, media_type="movie")
+            
+            add_item(label, url=url, info=info, art=art, is_folder=False)
+
+        end_dir()
+
+    except Exception as e:
+        xbmc.log(f"[SIMKL Watching] Movies failed: {e}", xbmc.LOGERROR)
+        add_item("Failed to fetch SIMKL data. Check kodi.log.")
+        end_dir()
+
+
+def show_search_menu():
+    xbmcplugin.setPluginCategory(HANDLE, "Search")
+    add_item("Series", url=build_url(action="search_series"), art={"icon": f"{MEDIA_PATH}/new.png", "thumb": f"{MEDIA_PATH}/new.png"})
+    add_item("Movies", url=build_url(action="search_movies"), art={"icon": f"{MEDIA_PATH}/movies.png", "thumb": f"{MEDIA_PATH}/movies.png"})
+    end_dir()
+
+
+def _homelander_search(prompt, homelander_url_fn):
+    term = xbmcgui.Dialog().input(prompt, type=xbmcgui.INPUT_ALPHANUM)
+    if not term or not term.strip():
+        return
+    homelander_url = homelander_url_fn(term.strip())
+    xbmc.sleep(500)
+    xbmc.executebuiltin(f'ActivateWindow(10025,"{homelander_url}",return)')
+
+
+def search_series():
+    addon = xbmcaddon.Addon()
+    tmdb = TmdbApi(addon)
+
+    if not tmdb.is_configured():
+        xbmcgui.Dialog().notification(
+            "Search Series",
+            "TMDB API key required. Add it in Settings.",
+            xbmcgui.NOTIFICATION_WARNING,
+        )
+        return
+
+    term = xbmcgui.Dialog().input("Search Series", type=xbmcgui.INPUT_ALPHANUM)
+    if not term or not term.strip():
+        return
+
+    try:
+        results = tmdb.search_tv(term.strip())
+    except Exception as e:
+        xbmc.log(f"[SIMKL Watching] TMDB search_tv failed: {e}", xbmc.LOGERROR)
+        xbmcgui.Dialog().notification("Search Series", "TMDB search failed", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    items = results.get("results") or []
+    if not items:
+        xbmcgui.Dialog().notification("Search Series", "No results found", xbmcgui.NOTIFICATION_INFO)
+        return
+
+    # Build selection list (cap at 10 for usability)
+    items = items[:10]
+    labels = []
+    for r in items:
+        name = r.get("name") or r.get("original_name") or "Unknown"
+        first_air = (r.get("first_air_date") or "")[:4]
+        labels.append(f"{name} ({first_air})" if first_air else name)
+
+    choice = xbmcgui.Dialog().select("Select Series", labels)
+    if choice < 0:
+        return
+
+    chosen = items[choice]
+    tmdb_id = chosen.get("id")
+    title = chosen.get("name") or chosen.get("original_name") or term.strip()
+    year = (chosen.get("first_air_date") or "")[:4]
+
+    try:
+        ext = tmdb.tv_external_ids(int(tmdb_id))
+    except Exception as e:
+        xbmc.log(f"[SIMKL Watching] TMDB tv_external_ids failed: {e}", xbmc.LOGERROR)
+        ext = {}
+
+    imdb_id = ext.get("imdb_id") or ""
+    tvdb_id = ext.get("tvdb_id") or ""
+
+    homelander_url = build_homelander_url("seasons", imdb_id, str(tmdb_id), title, year)
+    xbmc.sleep(500)
+    xbmc.executebuiltin(f'ActivateWindow(10025,"{homelander_url}",return)')
+
+
+def search_movies():
+    _homelander_search(
+        "Search Movies",
+        lambda term: (
+            "plugin://plugin.video.homelander/?action=movieSearchterm&name="
+            + urllib.parse.quote(term)
+        ),
+    )
+
+
 def show_help():
     xbmcplugin.setPluginCategory(HANDLE, "Settings / Help")
+    add_folder("Authorize SIMKL", "auth", icon=f"{MEDIA_PATH}/auth.png")
     add_item("Tip: Add TMDB API key in Settings to show episode air dates / countdown.")
     add_item("Debug: Enable 'Debug logging' to log raw SIMKL/TMDB responses.")
     end_dir()
@@ -552,18 +810,20 @@ def show_auth():
         percent = int((expires_in - remaining) * 100 / expires_in)
         percent = max(0, min(100, percent))
         dp.update(percent, f"Code: {user_code}\nTime left: {remaining}s")
-        if dp.iscanceled():
-            return
 
     token = None
+    cancelled = False
     try:
-        token = api.poll_pin(user_code, interval, expires_in, progress_cb=progress_cb)
+        token = api.poll_pin(user_code, interval, expires_in, progress_cb=progress_cb, cancel_fn=dp.iscanceled)
+        cancelled = dp.iscanceled()
     finally:
         dp.close()
 
     if token:
         api.save_token(token)
         xbmcgui.Dialog().notification("SIMKL", "Authorized successfully!", xbmcgui.NOTIFICATION_INFO)
+    elif cancelled:
+        xbmcgui.Dialog().notification("SIMKL", "Authorization cancelled", xbmcgui.NOTIFICATION_WARNING)
     else:
         xbmcgui.Dialog().notification("SIMKL", "Authorization timed out", xbmcgui.NOTIFICATION_ERROR)
 
@@ -673,6 +933,14 @@ def router():
         show_new_episodes()
     elif action == "upcoming":
         show_upcoming()
+    elif action == "movies":
+        show_movies()
+    elif action == "search_menu":
+        show_search_menu()
+    elif action == "search_series":
+        search_series()
+    elif action == "search_movies":
+        search_movies()
     elif action == "help":
         show_help()
     elif action == "auth":

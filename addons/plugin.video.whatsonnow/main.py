@@ -14,6 +14,7 @@ from resources.lib.playlist import build_m3u_url, build_epg_url
 from resources.lib.playlist_fetch import fetch_url, parse_and_index
 from resources.lib.http import download_to_file
 from resources.lib.xmltv import extract_now_next_from_file, extract_schedule_from_file
+from resources.lib.vod_export import export_vod_episodes
 from resources.lib import log
 
 ADDON = xbmcaddon.Addon()
@@ -283,9 +284,14 @@ def load_playlist_index(force: bool = False) -> dict:
         if not text:
             xbmcgui.Dialog().ok('WhatsOnNow', 'Local playlist file not found or empty. Check Local playlist path in Settings.')
             return {'channels': [], 'groups': {}, '_meta': {'epg_url': epg_url}}
-        index = parse_and_index(text.encode('utf-8', 'replace'), filter_fn=filter_fn, drop_vod=drop_vod)
+        data = text.encode('utf-8', 'replace')
+        index = parse_and_index(data, filter_fn=filter_fn, drop_vod=drop_vod)
         index['_meta'] = {'epg_url': epg_url}
         save_json(PLAYLIST_CACHE, index)
+        try:
+            export_vod_episodes(data)
+        except Exception as e:
+            log.warn(f"VOD export failed: {repr(e)}")
         return index
 
     timeout_s = get_setting_int('playlist_timeout', 180)
@@ -329,6 +335,11 @@ def load_playlist_index(force: bool = False) -> dict:
     index = parse_and_index(data, filter_fn=filter_fn, drop_vod=drop_vod)
     index['_meta'] = {'epg_url': epg_url}
     save_json(PLAYLIST_CACHE, index)
+
+    try:
+        export_vod_episodes(data)
+    except Exception as e:
+        log.warn(f"VOD export failed: {repr(e)}")
 
     tvg_present = sum(1 for ch in index.get('channels', []) if (ch.get('tvg_id') or '').strip())
     log.info(f"Playlist parsed: channels={len(index.get('channels', []))}, groups={len(index.get('groups', {}))}, tvg_ids={tvg_present}")
@@ -439,6 +450,7 @@ def _add_channel_item(ch: dict, index_i: int = None, epg_map: dict = None, url_o
             cm.append(('Add to favourites', f"RunPlugin({build_url({'action':'fav_add','i':str(index_i)})})"))
         else:
             cm.append(('Add to favourites', f"RunPlugin({build_url({'action':'fav_add_url','u':url,'n':name})})"))
+
     li.addContextMenuItems(cm)
 
     # Playback route
@@ -725,6 +737,47 @@ def play_channel_by_url(url: str, name: str = ''):
     xbmcplugin.setResolvedUrl(HANDLE, True, li)
 
 
+def play_m3u(url: str = '', name: str = ''):
+    local_playlist_path = get_setting('local_playlist_path', '')
+
+    if local_playlist_path:
+        try:
+            if xbmcvfs.exists(local_playlist_path):
+                st = xbmcvfs.Stat(local_playlist_path)
+                if st.st_size() > 0:
+                    li = xbmcgui.ListItem(path=local_playlist_path)
+                    li.setProperty('IsPlayable', 'true')
+                    xbmcplugin.setResolvedUrl(HANDLE, True, li)
+                    return
+                log.error(f"Play M3U failed: local playlist file is empty at {local_playlist_path}")
+            else:
+                log.error(f"Play M3U failed: local playlist file not found at {local_playlist_path}")
+        except Exception as e:
+            log.error(f"Play M3U failed reading local playlist file {local_playlist_path}: {repr(e)}")
+    else:
+        log.error('Play M3U failed: no local playlist path configured')
+
+    if _configured():
+        base_url = get_setting('base_url')
+        username = get_setting('username')
+        password = get_setting('password')
+        m3u_path = get_setting('m3u_path', '/get.php')
+        m3u_type = get_setting('m3u_type', 'm3u_plus')
+        output = get_setting('output', 'ts')
+
+        try:
+            m3u_url = build_m3u_url(base_url, m3u_path, username, password, m3u_type, output)
+            log.info(f"Play M3U fallback to remote playlist URL: {m3u_url}")
+            li = xbmcgui.ListItem(path=m3u_url)
+            li.setProperty('IsPlayable', 'true')
+            xbmcplugin.setResolvedUrl(HANDLE, True, li)
+            return
+        except Exception as e:
+            log.error(f"Play M3U failed opening remote playlist URL: {repr(e)}")
+
+    xbmcgui.Dialog().ok('WhatsOnNow', 'Unable to play M3U playlist. Check kodi.log for details.')
+
+
 def fav_add_index(i: str):
     idx = load_playlist_index(force=False)
     channels = idx.get('channels', [])
@@ -823,6 +876,8 @@ def router(paramstring: str):
         play_channel_by_index(params.get('i',''))
     elif action == 'play_url':
         play_channel_by_url(params.get('u',''), params.get('n',''))
+    elif action == 'play_m3u':
+        play_m3u(params.get('u',''), params.get('n',''))
     elif action == 'refresh':
         load_playlist_index(force=True); xbmc.executebuiltin('Container.Refresh')
     elif action == 'refresh_epg':

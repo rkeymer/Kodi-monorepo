@@ -60,12 +60,15 @@ class SimklApi:
         # GET /oauth/pin?client_id=... [1](https://forums.trakt.tv/t/next-episode-missing-from-watched-progress-on-api/88273)
         return self._get("/oauth/pin", params={"client_id": self.client_id}, auth=False)
 
-    def poll_pin(self, user_code: str, interval: int, expires_in: int, progress_cb=None):
-        # Poll GET /oauth/pin/{user_code} [1](https://forums.trakt.tv/t/next-episode-missing-from-watched-progress-on-api/88273)
+    def poll_pin(self, user_code: str, interval: int, expires_in: int, progress_cb=None, cancel_fn=None):
+        # Poll GET /oauth/pin/{user_code}
         deadline = time.time() + int(expires_in)
         wait = max(1, int(interval))
 
         while time.time() < deadline:
+            if cancel_fn and cancel_fn():
+                return None
+
             if progress_cb:
                 remaining = int(deadline - time.time())
                 progress_cb(remaining)
@@ -75,7 +78,13 @@ class SimklApi:
             if token:
                 return token
 
-            time.sleep(wait)
+            # Sleep in short ticks so cancellation is responsive
+            slept = 0
+            while slept < wait:
+                if cancel_fn and cancel_fn():
+                    return None
+                time.sleep(0.25)
+                slept += 0.25
 
         return None
 
@@ -93,4 +102,11 @@ class SimklApi:
         """
         data = self._get("/sync/all-items/shows/watching", auth=True)
 
+        return data
+
+    def get_plan_movies(self):
+        """
+        Fetch movies from the user's SIMKL Plan to Watch list.
+        """
+        data = self._get("/sync/all-items/movies/plan", auth=True)
         return data

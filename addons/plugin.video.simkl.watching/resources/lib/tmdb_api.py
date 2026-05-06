@@ -15,9 +15,22 @@ class TmdbApi:
         # Simple in-memory cache to reduce calls during a single run
         self._season_cache = {}  # (tv_id, season_number, language) -> dict
         self._tv_cache = {}      # (tv_id, language) -> dict
+        self._movie_cache = {}   # (movie_id, language) -> dict
 
     def is_configured(self) -> bool:
         return bool(self.api_key)
+
+    def movie_details(self, tmdb_movie_id: int, language="en-US"):
+        """
+        GET /movie/{movie_id}
+        """
+        key = (int(tmdb_movie_id), language)
+        if key in self._movie_cache:
+            return self._movie_cache[key]
+
+        data = self._get(f"/movie/{int(tmdb_movie_id)}", params={"language": language})
+        self._movie_cache[key] = data
+        return data
 
     def _get(self, path, params=None):
         if not self.api_key:
@@ -88,3 +101,11 @@ class TmdbApi:
         if isinstance(nxt, dict):
             return nxt.get("air_date")
         return None
+
+    def search_tv(self, query: str, language="en-US"):
+        """GET /search/tv"""
+        return self._get("/search/tv", params={"query": query, "language": language})
+
+    def tv_external_ids(self, tmdb_tv_id: int):
+        """GET /tv/{id}/external_ids — returns imdb_id, tvdb_id etc."""
+        return self._get(f"/tv/{int(tmdb_tv_id)}/external_ids")
