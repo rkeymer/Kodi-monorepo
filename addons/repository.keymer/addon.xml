@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<addon id="repository.keymer" name="Keymer Kodi Repo" provider-name="rkeymer" version="1.0.0">
+  <extension point="xbmc.addon.repository" name="Keymer Kodi Repo">
+    <dir>
+      <info compressed="false">https://rkeymer.github.io/Kodi-monorepo/addons.xml</info>
+      <checksum>https://rkeymer.github.io/Kodi-monorepo/addons.xml.md5</checksum>
+      <datadir zip="true">https://rkeymer.github.io/Kodi-monorepo/</datadir>
+    </dir>
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="en">Richard Keymer's personal Kodi addon repository</summary>
+    <platform>all</platform>
+  </extension>
+</addon>
