@@ -33,7 +33,9 @@ def build_zip(addon_dir: Path) -> Path:
             if path.suffix in EXCLUDE_EXTS:
                 continue
             if path.is_file():
-                zf.write(path, Path(addon_id) / rel)
+                # Use forward slashes — required by Kodi's zip parser
+                arcname = "/".join([addon_id] + list(rel.parts))
+                zf.write(path, arcname)
 
     return zip_path
 
