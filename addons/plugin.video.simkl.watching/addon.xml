@@ -2,7 +2,7 @@
 <addon
     id="plugin.video.simkl.watching"
     name="WhatsUpNext"
-    version="0.2.4"
+    version="0.2.5"
     provider-name="Personal">
 
     <requires>
@@ -16,6 +16,9 @@
     </extension>
 
     <extension point="xbmc.addon.metadata">
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
         <summary>See what’s up next from your SIMKL Watching list</summary>
         <description>
 WhatsUpNext shows:
