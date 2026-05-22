@@ -7,7 +7,8 @@ import xbmcaddon
 from datetime import datetime, timezone, date
 
 from resources.lib.simkl_api import SimklApi
-from resources.lib.tmdb_api import TmdbApi  # TMDB client module
+from resources.lib.tmdb_api import TmdbApi
+from resources.lib.alldebrid_api import AllDebridApi
 
 
 
@@ -56,12 +57,14 @@ def add_folder(label, action, icon=None):
     )
 
 
-def add_item(label, url="", info=None, art=None, is_folder=False):
+def add_item(label, url="", info=None, art=None, is_folder=False, context_menu=None):
     li = xbmcgui.ListItem(label=label)
     if info:
         li.setInfo("video", info)
     if art:
         li.setArt(art)
+    if context_menu:
+        li.addContextMenuItems(context_menu)
     xbmcplugin.addDirectoryItem(
         handle=HANDLE,
         url=url,
@@ -402,7 +405,19 @@ def show_new_episodes():
                 next=oldest if oldest != "unknown next episode" else ""
             )
 
-            add_item(label, url=url, info={"title": title}, art=art, is_folder=False)
+            ctx = None
+            se = parse_sxxexx(oldest)
+            if se:
+                season, episode = se
+                ad_url = build_url(
+                    action="play_alldebrid",
+                    title=title,
+                    season=season,
+                    episode=episode,
+                )
+                ctx = [("Play via AllDebrid", f"RunPlugin({ad_url})")]
+
+            add_item(label, url=url, info={"title": title}, art=art, is_folder=False, context_menu=ctx)
 
         end_dir()
 
@@ -920,6 +935,39 @@ def show_show_info(action):
 
 
 # --------------------------
+# AllDebrid playback
+# --------------------------
+def play_alldebrid(params):
+    title = params.get("title", "")
+    try:
+        season = int(params.get("season", 0))
+        episode = int(params.get("episode", 0))
+    except (ValueError, TypeError):
+        return
+
+    try:
+        stream_url, fname = AllDebridApi().find_episode(title, season, episode)
+    except Exception as e:
+        xbmc.log(f"[SIMKL Watching][AllDebrid] find_episode error: {e}", xbmc.LOGERROR)
+        stream_url, fname = None, None
+
+    if not stream_url:
+        xbmcgui.Dialog().notification(
+            "AllDebrid",
+            f"No match: {title} S{season:02d}E{episode:02d}",
+            xbmcgui.NOTIFICATION_WARNING,
+            3000,
+        )
+        return
+
+    label = fname or f"{title} S{season:02d}E{episode:02d}"
+    li = xbmcgui.ListItem(label=label, path=stream_url)
+    li.setInfo("video", {"title": label})
+    li.setProperty("IsPlayable", "true")
+    xbmc.Player().play(stream_url, li)
+
+
+# --------------------------
 # Router
 # --------------------------
 def router():
@@ -947,6 +995,8 @@ def router():
         show_auth()
     elif action == "open_homelander":
         open_homelander(params)
+    elif action == "play_alldebrid":
+        play_alldebrid(params)
     elif action.startswith("show_"):
         show_show_info(action)
     else:
