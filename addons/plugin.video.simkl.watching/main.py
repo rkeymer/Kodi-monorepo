@@ -397,12 +397,13 @@ def show_new_episodes():
                     art = {"thumb": purl, "poster": purl, "icon": purl}
 
             url = build_url(
-                action="show_season_episodes",
+                action="show_seasons",
                 title=title,
                 imdb=imdb_id,
                 tmdb=tmdb_id,
                 year=year,
-                next=oldest if oldest != "unknown next episode" else ""
+                next=oldest if oldest != "unknown next episode" else "",
+                simkl_poster=poster_path or ""
             )
 
             add_item(label, url=url, info={"title": title}, art=art, is_folder=True)
@@ -923,6 +924,71 @@ def show_show_info(action):
 
 
 # --------------------------
+# Season browser
+# --------------------------
+def show_seasons(params):
+    title = params.get("title", "")
+    imdb_id = params.get("imdb", "")
+    tmdb_id = params.get("tmdb", "")
+    year = params.get("year", "")
+    next_ep = params.get("next", "")
+    simkl_poster = params.get("simkl_poster", "")
+
+    se = parse_sxxexx(next_ep)
+    current_season = se[0] if se else 1
+
+    xbmcplugin.setPluginCategory(HANDLE, f"{title} — Seasons")
+    addon = xbmcaddon.Addon()
+
+    seasons = []  # list of (season_num, name, ep_count, poster_path)
+    show_poster_url = simkl_poster_url(simkl_poster) if simkl_poster else None
+
+    if tmdb_id:
+        try:
+            tmdb = TmdbApi(addon)
+            if tmdb.is_configured():
+                tv = tmdb.tv_details(int(tmdb_id))
+                for s in tv.get("seasons", []) or []:
+                    sn = s.get("season_number", 0)
+                    if sn == 0:
+                        continue
+                    seasons.append((
+                        sn,
+                        s.get("name") or f"Season {sn}",
+                        s.get("episode_count") or 0,
+                        s.get("poster_path"),
+                    ))
+        except Exception as e:
+            xbmc.log(f"[SIMKL Watching] TMDB tv_details failed: {e}", xbmc.LOGERROR)
+
+    if not seasons:
+        seasons = [(n, f"Season {n}", 0, None) for n in range(1, current_season + 1)]
+
+    for sn, name, ep_count, poster_path in seasons:
+        label = f"► {name}" if sn == current_season else name
+        if ep_count:
+            label += f"  ({ep_count} eps)"
+
+        if poster_path:
+            purl = tmdb_poster_url(poster_path)
+            art = {"thumb": purl, "poster": purl, "icon": purl}
+        elif show_poster_url:
+            art = {"thumb": show_poster_url, "poster": show_poster_url, "icon": show_poster_url}
+        else:
+            art = None
+
+        url = build_url(
+            action="show_season_episodes",
+            title=title, imdb=imdb_id, tmdb=tmdb_id, year=year,
+            next=next_ep, season_num=sn,
+            simkl_poster=simkl_poster
+        )
+        add_item(label, url=url, art=art, is_folder=True)
+
+    end_dir()
+
+
+# --------------------------
 # Season episode list
 # --------------------------
 def show_season_episodes(params):
@@ -931,17 +997,27 @@ def show_season_episodes(params):
     tmdb_id = params.get("tmdb", "")
     year = params.get("year", "")
     next_ep = params.get("next", "")
+    simkl_poster = params.get("simkl_poster", "")
 
+    # season_num overrides the season from next_ep (used when browsing other seasons)
     se = parse_sxxexx(next_ep)
-    if not se:
+    next_ep_num = se[1] if se else None
+    next_season = se[0] if se else 1
+
+    try:
+        season = int(params["season_num"])
+    except (KeyError, ValueError, TypeError):
+        season = next_season
+
+    if not season:
         open_homelander(params)
         return
-    season, next_ep_num = se
 
     xbmcplugin.setPluginCategory(HANDLE, f"{title} — Season {season}")
     addon = xbmcaddon.Addon()
 
-    episodes = []  # list of (ep_num, ep_title, air_date)
+    episodes = []  # list of (ep_num, ep_title, air_date, still_path)
+    show_poster_url = simkl_poster_url(simkl_poster) if simkl_poster else None
 
     if tmdb_id:
         try:
@@ -950,31 +1026,41 @@ def show_season_episodes(params):
                 season_data = tmdb.tv_season(int(tmdb_id), season)
                 for ep in season_data.get("episodes", []) or []:
                     ep_num = ep.get("episode_number")
-                    ep_title = ep.get("name") or f"Episode {ep_num}"
-                    air_date = ep.get("air_date") or ""
                     if ep_num:
-                        episodes.append((int(ep_num), ep_title, air_date))
+                        episodes.append((
+                            int(ep_num),
+                            ep.get("name") or f"Episode {ep_num}",
+                            ep.get("air_date") or "",
+                            ep.get("still_path"),
+                        ))
         except Exception as e:
             xbmc.log(f"[SIMKL Watching] TMDB season fetch failed: {e}", xbmc.LOGERROR)
 
     if not episodes:
-        episodes = [(n, f"Episode {n}", "") for n in range(1, 27)]
+        episodes = [(n, f"Episode {n}", "", None) for n in range(1, 27)]
 
     today = date.today()
 
-    for ep_num, ep_title, air_date in episodes:
+    for ep_num, ep_title, air_date, still_path in episodes:
         code = f"S{season:02d}E{ep_num:02d}"
 
         label = f"{code} — {ep_title}"
         if air_date:
             label += f"  ({air_date})"
-        if ep_num == next_ep_num:
+        if season == next_season and ep_num == next_ep_num:
             label = f"► {label}"
-
         if air_date:
             d = _parse_ymd_date(air_date)
             if d and d > today:
                 label += "  [upcoming]"
+
+        if still_path:
+            surl = f"https://image.tmdb.org/t/p/w300{still_path}"
+            art = {"thumb": surl, "icon": surl}
+        elif show_poster_url:
+            art = {"thumb": show_poster_url, "icon": show_poster_url}
+        else:
+            art = None
 
         hl_url = build_url(
             action="open_homelander",
@@ -990,7 +1076,7 @@ def show_season_episodes(params):
         add_item(
             label, url=hl_url,
             info={"title": ep_title, "episode": ep_num, "season": season},
-            context_menu=ctx,
+            art=art, context_menu=ctx,
             is_folder=False
         )
 
@@ -1056,6 +1142,8 @@ def router():
         show_help()
     elif action == "auth":
         show_auth()
+    elif action == "show_seasons":
+        show_seasons(params)
     elif action == "show_season_episodes":
         show_season_episodes(params)
     elif action == "open_homelander":
