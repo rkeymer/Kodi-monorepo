@@ -397,7 +397,7 @@ def show_new_episodes():
                     art = {"thumb": purl, "poster": purl, "icon": purl}
 
             url = build_url(
-                action="open_homelander",
+                action="show_season_episodes",
                 title=title,
                 imdb=imdb_id,
                 tmdb=tmdb_id,
@@ -405,19 +405,7 @@ def show_new_episodes():
                 next=oldest if oldest != "unknown next episode" else ""
             )
 
-            ctx = None
-            se = parse_sxxexx(oldest)
-            if se:
-                season, episode = se
-                ad_url = build_url(
-                    action="play_alldebrid",
-                    title=title,
-                    season=season,
-                    episode=episode,
-                )
-                ctx = [("Play via AllDebrid", f"RunPlugin({ad_url})")]
-
-            add_item(label, url=url, info={"title": title}, art=art, is_folder=False, context_menu=ctx)
+            add_item(label, url=url, info={"title": title}, art=art, is_folder=True)
 
         end_dir()
 
@@ -935,6 +923,81 @@ def show_show_info(action):
 
 
 # --------------------------
+# Season episode list
+# --------------------------
+def show_season_episodes(params):
+    title = params.get("title", "")
+    imdb_id = params.get("imdb", "")
+    tmdb_id = params.get("tmdb", "")
+    year = params.get("year", "")
+    next_ep = params.get("next", "")
+
+    se = parse_sxxexx(next_ep)
+    if not se:
+        open_homelander(params)
+        return
+    season, next_ep_num = se
+
+    xbmcplugin.setPluginCategory(HANDLE, f"{title} — Season {season}")
+    addon = xbmcaddon.Addon()
+
+    episodes = []  # list of (ep_num, ep_title, air_date)
+
+    if tmdb_id:
+        try:
+            tmdb = TmdbApi(addon)
+            if tmdb.is_configured():
+                season_data = tmdb.tv_season(int(tmdb_id), season)
+                for ep in season_data.get("episodes", []) or []:
+                    ep_num = ep.get("episode_number")
+                    ep_title = ep.get("name") or f"Episode {ep_num}"
+                    air_date = ep.get("air_date") or ""
+                    if ep_num:
+                        episodes.append((int(ep_num), ep_title, air_date))
+        except Exception as e:
+            xbmc.log(f"[SIMKL Watching] TMDB season fetch failed: {e}", xbmc.LOGERROR)
+
+    if not episodes:
+        episodes = [(n, f"Episode {n}", "") for n in range(1, 27)]
+
+    today = date.today()
+
+    for ep_num, ep_title, air_date in episodes:
+        code = f"S{season:02d}E{ep_num:02d}"
+
+        label = f"{code} — {ep_title}"
+        if air_date:
+            label += f"  ({air_date})"
+        if ep_num == next_ep_num:
+            label = f"► {label}"
+
+        if air_date:
+            d = _parse_ymd_date(air_date)
+            if d and d > today:
+                label += "  [upcoming]"
+
+        hl_url = build_url(
+            action="open_homelander",
+            title=title, imdb=imdb_id, tmdb=tmdb_id, year=year,
+            next=code
+        )
+
+        ctx = [(
+            "Play via AllDebrid",
+            f"RunPlugin({build_url(action='play_alldebrid', title=title, season=season, episode=ep_num)})"
+        )]
+
+        add_item(
+            label, url=hl_url,
+            info={"title": ep_title, "episode": ep_num, "season": season},
+            context_menu=ctx,
+            is_folder=False
+        )
+
+    end_dir()
+
+
+# --------------------------
 # AllDebrid playback
 # --------------------------
 def play_alldebrid(params):
@@ -993,6 +1056,8 @@ def router():
         show_help()
     elif action == "auth":
         show_auth()
+    elif action == "show_season_episodes":
+        show_season_episodes(params)
     elif action == "open_homelander":
         open_homelander(params)
     elif action == "play_alldebrid":
