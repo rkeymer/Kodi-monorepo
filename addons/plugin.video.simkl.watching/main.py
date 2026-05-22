@@ -1090,13 +1090,13 @@ def show_season_episodes(params):
             f"RunPlugin({build_url(action='play_alldebrid', title=title, season=season, episode=ep_num)})"
         )]
 
-        ad_label = "AD ✓" if ep_num in ad_available else ""
+        if ep_num in ad_available:
+            label += "  [COLOR lime]● AD[/COLOR]"
 
         add_item(
             label, url=hl_url,
             info={"title": ep_title, "episode": ep_num, "season": season},
             art=art, context_menu=ctx,
-            label2=ad_label,
             is_folder=False
         )
 
