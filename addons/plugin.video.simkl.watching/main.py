@@ -396,13 +396,15 @@ def show_new_episodes():
                 if purl:
                     art = {"thumb": purl, "poster": purl, "icon": purl}
 
+            se = parse_sxxexx(oldest)
             url = build_url(
-                action="show_seasons",
+                action="show_season_episodes",
                 title=title,
                 imdb=imdb_id,
                 tmdb=tmdb_id,
                 year=year,
                 next=oldest if oldest != "unknown next episode" else "",
+                season_num=se[0] if se else 1,
                 simkl_poster=poster_path or ""
             )
 
@@ -1038,6 +1040,14 @@ def show_season_episodes(params):
 
     if not episodes:
         episodes = [(n, f"Episode {n}", "", None) for n in range(1, 27)]
+
+    all_seasons_url = build_url(
+        action="show_seasons",
+        title=title, imdb=imdb_id, tmdb=tmdb_id, year=year,
+        next=next_ep, simkl_poster=simkl_poster
+    )
+    art_fallback = {"thumb": show_poster_url, "icon": show_poster_url} if show_poster_url else None
+    add_item("« All Seasons", url=all_seasons_url, art=art_fallback, is_folder=True)
 
     today = date.today()
 
