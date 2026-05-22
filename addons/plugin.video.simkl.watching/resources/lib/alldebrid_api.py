@@ -14,7 +14,8 @@ except ImportError:
 
 # TODO: move to addon settings before release
 _API_KEY = "TiSKYaxF1f1jun2fbjL5"
-_BASE = "https://api.alldebrid.com/v4"
+_BASE_V4  = "https://api.alldebrid.com/v4"
+_BASE_V41 = "https://api.alldebrid.com/v4.1"
 _AGENT = "plugin.video.simkl.watching"
 
 _VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts", ".m2ts"}
@@ -36,20 +37,18 @@ _NOISE = re.compile(
 def _normalize(s):
     s = str(s)
     s = re.sub(r"[._]+", " ", s)
-    s = re.sub(r"\[.*?\]", " ", s)        # remove [release groups]
-    s = re.sub(r"\([^)]*\)", " ", s)       # remove (anything in parens)
-    s = re.sub(r"S\d{1,2}E\d{1,2}", " ", s, flags=re.IGNORECASE)  # SxxExx
-    s = re.sub(r"S\d{1,2}\b", " ", s, flags=re.IGNORECASE)         # Sxx alone
-    s = re.sub(r"\bSeason\s*\d+\b", " ", s, flags=re.IGNORECASE)   # Season N
-    s = re.sub(r"\b\d{4}\b", " ", s)       # years
+    s = re.sub(r"\[.*?\]", " ", s)
+    s = re.sub(r"\([^)]*\)", " ", s)
+    s = re.sub(r"S\d{1,2}E\d{1,2}", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"S\d{1,2}\b", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bSeason\s*\d+\b", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\b\d{4}\b", " ", s)
     s = _NOISE.sub(" ", s)
-    # strip leading junk like "www.site.org - "
     s = re.sub(r"^[\w.]+\.\w{2,4}\s*[-–]\s*", "", s)
     return re.sub(r"\s+", " ", s).strip().lower()
 
 
 def _se_from_filename(filename):
-    """Return (season, episode) ints or None."""
     m = re.search(r"[Ss](\d{1,2})[Ee](\d{1,2})", filename)
     if m:
         return int(m.group(1)), int(m.group(2))
@@ -71,39 +70,56 @@ def _score(norm_title, norm_mag):
     return SequenceMatcher(None, norm_title, norm_mag).ratio()
 
 
+def _flatten_tree(nodes):
+    """Recursively flatten AllDebrid file tree into (filename, link) tuples."""
+    for node in nodes:
+        if "e" in node:
+            yield from _flatten_tree(node["e"])
+        elif "l" in node:
+            yield node["n"], node["l"]
+
+
 class AllDebridApi:
 
-    def _get(self, path, params=None):
-        p = {"agent": _AGENT, "apikey": _API_KEY}
-        if params:
-            p.update(params)
-        url = f"{_BASE}/{path}?{urllib.parse.urlencode(p)}"
-        req = urllib.request.Request(url, headers={"User-Agent": _AGENT})
+    def _post(self, base, path, data=None):
+        params = {"agent": _AGENT, "apikey": _API_KEY}
+        if data:
+            params.update(data)
+        url = f"{base}/{path}"
+        encoded = urllib.parse.urlencode(params, doseq=True).encode()
+        req = urllib.request.Request(
+            url, data=encoded,
+            headers={"User-Agent": _AGENT, "Content-Type": "application/x-www-form-urlencoded"}
+        )
         with urllib.request.urlopen(req, timeout=15) as r:
             return json.loads(r.read().decode())
 
     def _get_all_magnets(self):
-        resp = self._get("magnet/status")
-        _log(f"magnet/status response status: {resp.get('status')} | data keys: {list(resp.get('data', {}).keys())}")
+        resp = self._post(_BASE_V41, "magnet/status")
+        _log(f"magnet/status v4.1: status={resp.get('status')} | data keys={list(resp.get('data', {}).keys())}")
         if resp.get("status") != "success":
-            _log(f"API error: {resp}")
+            _log(f"API error: {resp.get('error', resp)}")
             return []
         magnets = resp.get("data", {}).get("magnets", [])
         _log(f"Total magnets returned: {len(magnets)}")
         return magnets
 
     def _get_magnet_files(self, magnet_id):
-        resp = self._get("magnet/status", {"id": str(magnet_id)})
+        resp = self._post(_BASE_V4, "magnet/files", {"id[]": str(magnet_id)})
         if resp.get("status") != "success":
+            _log(f"magnet/files error for {magnet_id}: {resp.get('error', resp)}")
             return []
         magnets = resp.get("data", {}).get("magnets", [])
         if not magnets:
             return []
-        return magnets[0].get("links", [])
+        files = list(_flatten_tree(magnets[0].get("files", [])))
+        _log(f"magnet {magnet_id} files: {[f[0] for f in files]}")
+        return files  # list of (filename, link)
 
     def unlock_link(self, link):
-        resp = self._get("link/unlock", {"link": link})
+        resp = self._post(_BASE_V4, "link/unlock", {"link": link})
         if resp.get("status") != "success":
+            _log(f"unlock error: {resp.get('error', resp)}")
             return None
         return resp.get("data", {}).get("link")
 
@@ -118,36 +134,27 @@ class AllDebridApi:
         magnets = self._get_all_magnets()
         _log(f"Searching for '{norm_title}' S{season:02d}E{episode:02d} in {len(magnets)} magnets")
 
-        # Score every magnet against the show title
         scored = []
         for mag in magnets:
             norm_mag = _normalize(mag.get("filename", ""))
             s = _score(norm_title, norm_mag)
             if s >= 0.55:
                 scored.append((s, mag))
-            elif norm_title[:4] in norm_mag:
-                # Log near-misses to help tune the threshold
-                _log(f"Near-miss (score={s:.2f}): '{mag.get('filename')}' -> '{norm_mag}'")
 
-        _log(f"Title candidates: {[(round(s,2), m['filename']) for s,m in scored]}")
+        _log(f"Title candidates: {[(round(s, 2), m['filename']) for s, m in scored]}")
 
         if not scored:
             return None, None
 
-        # Search title-matching magnets for the episode file
         scored.sort(key=lambda x: -x[0])
         for title_score, mag in scored:
-            files = mag.get("links") or self._get_magnet_files(mag["id"])
-            _log(f"Checking magnet '{mag['filename']}' (score={title_score:.2f}): {len(files)} files")
-            for f in files:
-                fname = f.get("filename", "")
+            files = self._get_magnet_files(mag["id"])
+            for fname, link in files:
                 se = _se_from_filename(fname)
-                _log(f"  file: '{fname}' -> se={se} video={_is_video(fname)}")
-                if not _is_video(fname):
-                    continue
-                if se == target:
-                    stream_url = self.unlock_link(f["link"])
-                    _log(f"Match found: '{fname}' -> stream={'ok' if stream_url else 'FAILED'}")
+                if _is_video(fname) and se == target:
+                    _log(f"Episode match: '{fname}' in magnet '{mag['filename']}'")
+                    stream_url = self.unlock_link(link)
+                    _log(f"Stream URL: {'ok' if stream_url else 'FAILED'}")
                     if stream_url:
                         return stream_url, fname.rsplit("/", 1)[-1]
 
