@@ -57,8 +57,8 @@ def add_folder(label, action, icon=None):
     )
 
 
-def add_item(label, url="", info=None, art=None, is_folder=False, context_menu=None):
-    li = xbmcgui.ListItem(label=label)
+def add_item(label, url="", info=None, art=None, is_folder=False, context_menu=None, label2=""):
+    li = xbmcgui.ListItem(label=label, label2=label2)
     if info:
         li.setInfo("video", info)
     if art:
@@ -1049,6 +1049,13 @@ def show_season_episodes(params):
     art_fallback = {"thumb": show_poster_url, "icon": show_poster_url} if show_poster_url else None
     add_item("« All Seasons", url=all_seasons_url, art=art_fallback, is_folder=True)
 
+    # Fetch AllDebrid availability for the whole season in one pass
+    ad_available = set()
+    try:
+        ad_available = AllDebridApi().get_available_episodes(title, season)
+    except Exception as e:
+        xbmc.log(f"[SIMKL Watching] AllDebrid availability check failed: {e}", xbmc.LOGERROR)
+
     today = date.today()
 
     for ep_num, ep_title, air_date, still_path in episodes:
@@ -1083,10 +1090,13 @@ def show_season_episodes(params):
             f"RunPlugin({build_url(action='play_alldebrid', title=title, season=season, episode=ep_num)})"
         )]
 
+        ad_label = "AD ✓" if ep_num in ad_available else ""
+
         add_item(
             label, url=hl_url,
             info={"title": ep_title, "episode": ep_num, "season": season},
             art=art, context_menu=ctx,
+            label2=ad_label,
             is_folder=False
         )
 

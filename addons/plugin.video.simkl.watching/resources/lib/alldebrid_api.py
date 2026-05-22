@@ -123,6 +123,34 @@ class AllDebridApi:
             return None
         return resp.get("data", {}).get("link")
 
+    def get_available_episodes(self, show_title, season):
+        """
+        Returns a set of episode numbers available in AllDebrid for the given show/season.
+        Fetches magnet list once, then file lists only for title-matching magnets.
+        """
+        norm_title = _normalize(show_title)
+        target_season = int(season)
+
+        magnets = self._get_all_magnets()
+        scored = []
+        for mag in magnets:
+            s = _score(norm_title, _normalize(mag.get("filename", "")))
+            if s >= 0.55:
+                scored.append((s, mag))
+
+        scored.sort(key=lambda x: -x[0])
+        available = set()
+
+        for _, mag in scored[:6]:  # cap at 6 magnets to keep it fast
+            files = self._get_magnet_files(mag["id"])
+            for fname, _ in files:
+                se = _se_from_filename(fname)
+                if se and se[0] == target_season and _is_video(fname):
+                    available.add(se[1])
+
+        _log(f"Available episodes for '{show_title}' S{season:02d}: {sorted(available)}")
+        return available
+
     def find_episode(self, show_title, season, episode):
         """
         Search saved magnets for a matching episode.
