@@ -4,6 +4,14 @@ import urllib.request
 import urllib.parse
 from difflib import SequenceMatcher
 
+try:
+    import xbmc
+    def _log(msg):
+        xbmc.log(f"[SIMKL Watching][AllDebrid] {msg}", xbmc.LOGINFO)
+except ImportError:
+    def _log(msg):
+        print(f"[AllDebrid] {msg}")
+
 # TODO: move to addon settings before release
 _API_KEY = "TiSKYaxF1f1jun2fbjL5"
 _BASE = "https://api.alldebrid.com/v4"
@@ -76,9 +84,13 @@ class AllDebridApi:
 
     def _get_all_magnets(self):
         resp = self._get("magnet/status")
+        _log(f"magnet/status response status: {resp.get('status')} | data keys: {list(resp.get('data', {}).keys())}")
         if resp.get("status") != "success":
+            _log(f"API error: {resp}")
             return []
-        return resp.get("data", {}).get("magnets", [])
+        magnets = resp.get("data", {}).get("magnets", [])
+        _log(f"Total magnets returned: {len(magnets)}")
+        return magnets
 
     def _get_magnet_files(self, magnet_id):
         resp = self._get("magnet/status", {"id": str(magnet_id)})
@@ -104,13 +116,20 @@ class AllDebridApi:
         target = (int(season), int(episode))
 
         magnets = self._get_all_magnets()
+        _log(f"Searching for '{norm_title}' S{season:02d}E{episode:02d} in {len(magnets)} magnets")
 
         # Score every magnet against the show title
         scored = []
         for mag in magnets:
-            s = _score(norm_title, _normalize(mag.get("filename", "")))
+            norm_mag = _normalize(mag.get("filename", ""))
+            s = _score(norm_title, norm_mag)
             if s >= 0.55:
                 scored.append((s, mag))
+            elif norm_title[:4] in norm_mag:
+                # Log near-misses to help tune the threshold
+                _log(f"Near-miss (score={s:.2f}): '{mag.get('filename')}' -> '{norm_mag}'")
+
+        _log(f"Title candidates: {[(round(s,2), m['filename']) for s,m in scored]}")
 
         if not scored:
             return None, None
@@ -119,12 +138,16 @@ class AllDebridApi:
         scored.sort(key=lambda x: -x[0])
         for title_score, mag in scored:
             files = mag.get("links") or self._get_magnet_files(mag["id"])
+            _log(f"Checking magnet '{mag['filename']}' (score={title_score:.2f}): {len(files)} files")
             for f in files:
                 fname = f.get("filename", "")
+                se = _se_from_filename(fname)
+                _log(f"  file: '{fname}' -> se={se} video={_is_video(fname)}")
                 if not _is_video(fname):
                     continue
-                if _se_from_filename(fname) == target:
+                if se == target:
                     stream_url = self.unlock_link(f["link"])
+                    _log(f"Match found: '{fname}' -> stream={'ok' if stream_url else 'FAILED'}")
                     if stream_url:
                         return stream_url, fname.rsplit("/", 1)[-1]
 
