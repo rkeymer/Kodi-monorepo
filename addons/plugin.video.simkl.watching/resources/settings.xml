@@ -20,6 +20,13 @@
              default="false"/>
   </category>
 
+  <category label="AllDebrid">
+    <setting id="alldebrid_api_key"
+             type="text"
+             label="AllDebrid API Key"
+             default=""/>
+  </category>
+
   <category label="TMDB">
     <setting id="tmdb_api_key"
              type="text"

@@ -1052,7 +1052,9 @@ def show_season_episodes(params):
     # Fetch AllDebrid availability for the whole season in one pass
     ad_available = set()
     try:
-        ad_available = AllDebridApi().get_available_episodes(title, season)
+        ad_api = AllDebridApi()
+        if ad_api.is_configured():
+            ad_available = ad_api.get_available_episodes(title, season)
     except Exception as e:
         xbmc.log(f"[SIMKL Watching] AllDebrid availability check failed: {e}", xbmc.LOGERROR)
 
@@ -1115,7 +1117,11 @@ def play_alldebrid(params):
         return
 
     try:
-        stream_url, fname = AllDebridApi().find_episode(title, season, episode)
+        ad_api = AllDebridApi()
+        if not ad_api.is_configured():
+            xbmcgui.Dialog().notification("AllDebrid", "API key not set — add it in Settings", xbmcgui.NOTIFICATION_WARNING, 3000)
+            return
+        stream_url, fname = ad_api.find_episode(title, season, episode)
     except Exception as e:
         xbmc.log(f"[SIMKL Watching][AllDebrid] find_episode error: {e}", xbmc.LOGERROR)
         stream_url, fname = None, None

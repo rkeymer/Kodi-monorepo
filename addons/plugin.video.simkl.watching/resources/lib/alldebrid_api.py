@@ -12,8 +12,6 @@ except ImportError:
     def _log(msg):
         print(f"[AllDebrid] {msg}")
 
-# TODO: move to addon settings before release
-_API_KEY = "TiSKYaxF1f1jun2fbjL5"
 _BASE_V4  = "https://api.alldebrid.com/v4"
 _BASE_V41 = "https://api.alldebrid.com/v4.1"
 _AGENT = "plugin.video.simkl.watching"
@@ -81,8 +79,18 @@ def _flatten_tree(nodes):
 
 class AllDebridApi:
 
+    def __init__(self):
+        try:
+            import xbmcaddon
+            self._api_key = xbmcaddon.Addon().getSettingString("alldebrid_api_key").strip()
+        except Exception:
+            self._api_key = ""
+
+    def is_configured(self):
+        return bool(self._api_key)
+
     def _post(self, base, path, data=None):
-        params = {"agent": _AGENT, "apikey": _API_KEY}
+        params = {"agent": _AGENT, "apikey": self._api_key}
         if data:
             params.update(data)
         url = f"{base}/{path}"
