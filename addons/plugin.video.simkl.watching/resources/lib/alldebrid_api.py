@@ -3,6 +3,10 @@ import json
 import urllib.request
 import urllib.parse
 from difflib import SequenceMatcher
+from resources.lib.cache import DiskCache
+
+_cache_magnets = DiskCache("ad_magnets", ttl=600)       # 10 min
+_cache_files   = DiskCache("ad_magnet_files", ttl=1800) # 30 min
 
 try:
     import xbmc
@@ -103,6 +107,10 @@ class AllDebridApi:
             return json.loads(r.read().decode())
 
     def _get_all_magnets(self):
+        cached = _cache_magnets.get("all")
+        if cached is not None:
+            _log(f"magnet list from cache ({len(cached)} magnets)")
+            return cached
         resp = self._post(_BASE_V41, "magnet/status")
         _log(f"magnet/status v4.1: status={resp.get('status')} | data keys={list(resp.get('data', {}).keys())}")
         if resp.get("status") != "success":
@@ -110,10 +118,16 @@ class AllDebridApi:
             return []
         magnets = resp.get("data", {}).get("magnets", [])
         _log(f"Total magnets returned: {len(magnets)}")
+        _cache_magnets.set("all", magnets)
         return magnets
 
     def _get_magnet_files(self, magnet_id):
-        resp = self._post(_BASE_V4, "magnet/files", {"id[]": str(magnet_id)})
+        key = str(magnet_id)
+        cached = _cache_files.get(key)
+        if cached is not None:
+            _log(f"magnet {magnet_id} files from cache ({len(cached)} files)")
+            return cached
+        resp = self._post(_BASE_V4, "magnet/files", {"id[]": key})
         if resp.get("status") != "success":
             _log(f"magnet/files error for {magnet_id}: {resp.get('error', resp)}")
             return []
@@ -122,6 +136,7 @@ class AllDebridApi:
             return []
         files = list(_flatten_tree(magnets[0].get("files", [])))
         _log(f"magnet {magnet_id} files: {[f[0] for f in files]}")
+        _cache_files.set(key, files)
         return files  # list of (filename, link)
 
     def unlock_link(self, link):

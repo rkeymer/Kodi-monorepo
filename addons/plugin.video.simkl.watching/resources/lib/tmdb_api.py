@@ -2,8 +2,13 @@ import json
 import urllib.parse
 import urllib.request
 import xbmc
+from resources.lib.cache import DiskCache
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
+
+_cache_season = DiskCache("tmdb_season", ttl=86400)  # 24 h — episode lists rarely change
+_cache_tv     = DiskCache("tmdb_tv",     ttl=21600)  # 6 h  — next_episode_to_air updates
+_cache_movie  = DiskCache("tmdb_movie",  ttl=86400)  # 24 h
 
 
 class TmdbApi:
@@ -12,24 +17,16 @@ class TmdbApi:
         self.api_key = addon.getSettingString("tmdb_api_key").strip()
         self.debug = addon.getSettingBool("debug_logging")
 
-        # Simple in-memory cache to reduce calls during a single run
-        self._season_cache = {}  # (tv_id, season_number, language) -> dict
-        self._tv_cache = {}      # (tv_id, language) -> dict
-        self._movie_cache = {}   # (movie_id, language) -> dict
-
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
     def movie_details(self, tmdb_movie_id: int, language="en-US"):
-        """
-        GET /movie/{movie_id}
-        """
-        key = (int(tmdb_movie_id), language)
-        if key in self._movie_cache:
-            return self._movie_cache[key]
-
+        key = f"{tmdb_movie_id}:{language}"
+        cached = _cache_movie.get(key)
+        if cached is not None:
+            return cached
         data = self._get(f"/movie/{int(tmdb_movie_id)}", params={"language": language})
-        self._movie_cache[key] = data
+        _cache_movie.set(key, data)
         return data
 
     def _get(self, path, params=None):
@@ -37,7 +34,6 @@ class TmdbApi:
             raise RuntimeError("Missing TMDB API key in add-on settings.")
 
         params = dict(params or {})
-        # TMDB v3 auth: api_key query parameter is supported. [1](https://www.rdocumentation.org/packages/TMDb/versions/1.1/topics/tv_season)[2](https://mcp-link.vercel.app/links/tmdb)
         params["api_key"] = self.api_key
 
         url = TMDB_API_BASE + path + "?" + urllib.parse.urlencode(params)
@@ -54,38 +50,27 @@ class TmdbApi:
     # -------------------------
 
     def tv_details(self, tmdb_tv_id: int, language="en-US"):
-        """
-        GET /tv/{series_id}
-        Response includes next_episode_to_air (when known). [3](https://adamayoung.github.io/TMDb/documentation/tmdb/)
-        """
-        key = (int(tmdb_tv_id), language)
-        if key in self._tv_cache:
-            return self._tv_cache[key]
-
+        key = f"{tmdb_tv_id}:{language}"
+        cached = _cache_tv.get(key)
+        if cached is not None:
+            return cached
         data = self._get(f"/tv/{int(tmdb_tv_id)}", params={"language": language})
-        self._tv_cache[key] = data
+        _cache_tv.set(key, data)
         return data
 
     def tv_season(self, tmdb_tv_id: int, season_number: int, language="en-US"):
-        """
-        GET /tv/{series_id}/season/{season_number}
-        Season response includes episodes list with air_date fields. [4](https://developer.themoviedb.org/reference/search-tv)
-        """
-        key = (int(tmdb_tv_id), int(season_number), language)
-        if key in self._season_cache:
-            return self._season_cache[key]
-
+        key = f"{tmdb_tv_id}:{season_number}:{language}"
+        cached = _cache_season.get(key)
+        if cached is not None:
+            return cached
         data = self._get(
             f"/tv/{int(tmdb_tv_id)}/season/{int(season_number)}",
             params={"language": language}
         )
-        self._season_cache[key] = data
+        _cache_season.set(key, data)
         return data
 
     def episode_air_date(self, tmdb_tv_id: int, season_number: int, episode_number: int, language="en-US"):
-        """
-        Fetch season details and return air_date for a specific episode.
-        """
         season = self.tv_season(tmdb_tv_id, season_number, language=language)
         for ep in season.get("episodes", []) or []:
             if ep.get("episode_number") == int(episode_number):
@@ -93,9 +78,6 @@ class TmdbApi:
         return None
 
     def next_episode_air_date(self, tmdb_tv_id: int, language="en-US"):
-        """
-        Uses tv details to find next_episode_to_air.air_date when present. [3](https://adamayoung.github.io/TMDb/documentation/tmdb/)
-        """
         details = self.tv_details(tmdb_tv_id, language=language)
         nxt = details.get("next_episode_to_air")
         if isinstance(nxt, dict):
@@ -103,7 +85,7 @@ class TmdbApi:
         return None
 
     def search_tv(self, query: str, language="en-US"):
-        """GET /search/tv"""
+        """GET /search/tv — not cached (user-initiated search)"""
         return self._get("/search/tv", params={"query": query, "language": language})
 
     def tv_external_ids(self, tmdb_tv_id: int):

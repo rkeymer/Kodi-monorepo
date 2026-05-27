@@ -9,6 +9,7 @@ from datetime import datetime, timezone, date
 from resources.lib.simkl_api import SimklApi
 from resources.lib.tmdb_api import TmdbApi
 from resources.lib.alldebrid_api import AllDebridApi
+from resources.lib.local_media import LocalMediaApi
 
 
 
@@ -1058,6 +1059,15 @@ def show_season_episodes(params):
     except Exception as e:
         xbmc.log(f"[SIMKL Watching] AllDebrid availability check failed: {e}", xbmc.LOGERROR)
 
+    # Fetch local file availability
+    lf_available = set()
+    try:
+        lf_api = LocalMediaApi()
+        if lf_api.is_configured():
+            lf_available = lf_api.get_available_episodes(title, season)
+    except Exception as e:
+        xbmc.log(f"[SIMKL Watching] Local media availability check failed: {e}", xbmc.LOGERROR)
+
     today = date.today()
 
     for ep_num, ep_title, air_date, still_path in episodes:
@@ -1091,9 +1101,16 @@ def show_season_episodes(params):
             "Play via AllDebrid",
             f"RunPlugin({build_url(action='play_alldebrid', title=title, season=season, episode=ep_num)})"
         )]
+        if ep_num in lf_available:
+            ctx.append((
+                "Play local file",
+                f"RunPlugin({build_url(action='play_local', title=title, season=season, episode=ep_num)})"
+            ))
 
         if ep_num in ad_available:
             label += "  [COLOR lime]● AD[/COLOR]"
+        if ep_num in lf_available:
+            label += "  [COLOR dodgerblue]● LF[/COLOR]"
 
         add_item(
             label, url=hl_url,
@@ -1143,6 +1160,39 @@ def play_alldebrid(params):
 
 
 # --------------------------
+# Local file playback
+# --------------------------
+def play_local(params):
+    title = params.get("title", "")
+    try:
+        season = int(params.get("season", 0))
+        episode = int(params.get("episode", 0))
+    except (ValueError, TypeError):
+        return
+
+    lf_api = LocalMediaApi()
+    if not lf_api.is_configured():
+        xbmcgui.Dialog().notification("Local Media", "Base path not set — add it in Settings", xbmcgui.NOTIFICATION_WARNING, 3000)
+        return
+
+    file_path = lf_api.find_episode(title, season, episode)
+    if not file_path:
+        xbmcgui.Dialog().notification(
+            "Local Media",
+            f"No file found: {title} S{season:02d}E{episode:02d}",
+            xbmcgui.NOTIFICATION_WARNING,
+            3000,
+        )
+        return
+
+    label = f"{title} S{season:02d}E{episode:02d}"
+    li = xbmcgui.ListItem(label=label, path=file_path)
+    li.setInfo("video", {"title": label})
+    li.setProperty("IsPlayable", "true")
+    xbmc.Player().play(file_path, li)
+
+
+# --------------------------
 # Router
 # --------------------------
 def router():
@@ -1176,6 +1226,8 @@ def router():
         open_homelander(params)
     elif action == "play_alldebrid":
         play_alldebrid(params)
+    elif action == "play_local":
+        play_local(params)
     elif action.startswith("show_"):
         show_show_info(action)
     else:
