@@ -154,10 +154,7 @@ def _days_until(iso_yyyy_mm_dd):
 # --------------------------
 # Homelander integration
 # --------------------------
-def build_homelander_url(action, imdb, tmdb, tvshowtitle, year, season=None):
-    """
-    Builds a Homelander navigation URL based on what you captured in kodi.log.
-    """
+def build_homelander_url(action, imdb, tmdb, tvshowtitle, year, season=None, episode=None):
     params = {
         "action": action,
         "imdb": imdb or "",
@@ -167,24 +164,28 @@ def build_homelander_url(action, imdb, tmdb, tvshowtitle, year, season=None):
     }
     if season is not None:
         params["season"] = str(season)
+    if episode is not None:
+        params["episode"] = str(episode)
     qs = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
     return f"plugin://plugin.video.homelander/?{qs}"
 
 
-def focus_episode_in_ui(target_episode, delay_before=1.2, delay_between=0.06):
-    """
-    Best-effort: waits briefly for Homelander to render the episode list,
-    then sends 'Down' actions (episode-1 times) to highlight the target episode.
-    """
-    try:
-        monitor = xbmc.Monitor()
-        monitor.waitForAbort(delay_before)
-        steps = max(0, int(target_episode) - 1)
-        for _ in range(steps):
-            xbmc.executebuiltin("Action(Down)")
-            monitor.waitForAbort(delay_between)
-    except Exception as e:
-        xbmc.log(f"[SIMKL Watching] focus_episode_in_ui error: {e}", xbmc.LOGERROR)
+def build_homelander_play_url(imdb, tmdb, tvshowtitle, year, season, episode, ep_title="", premiered=""):
+    import json as _json
+    params = {
+        "action": "play",
+        "title": ep_title or tvshowtitle or "",
+        "year": str(year or ""),
+        "imdb": imdb or "",
+        "tmdb": tmdb or "",
+        "season": str(season),
+        "episode": str(episode),
+        "tvshowtitle": tvshowtitle or "",
+        "premiered": premiered or "",
+        "meta": _json.dumps({}),
+    }
+    qs = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+    return f"plugin://plugin.video.homelander/?{qs}"
 
 
 def open_homelander(params):
@@ -193,6 +194,8 @@ def open_homelander(params):
     tmdb = params.get("tmdb", "")
     year = params.get("year", "")
     nxt = params.get("next", "")  # e.g. "S01E03" (may be empty)
+    ep_title = params.get("ep_title", "")
+    air_date = params.get("air_date", "")
     media_type = params.get("media_type", "tv")
 
     if media_type == "movie":
@@ -210,17 +213,14 @@ def open_homelander(params):
     if se:
         season, episode = se
 
-    if season is not None:
-        homelander_url = build_homelander_url("episodes", imdb, tmdb, title, year, season=season)
+    if season is not None and episode is not None:
+        homelander_url = build_homelander_play_url(imdb, tmdb, title, year, season, episode, ep_title, air_date)
+        xbmc.log(f"[SIMKL Watching] open_homelander play URL: {homelander_url}", xbmc.LOGINFO)
+        xbmc.executebuiltin(f'RunPlugin("{homelander_url}")')
     else:
         homelander_url = build_homelander_url("seasons", imdb, tmdb, title, year)
-
-    xbmc.log(f"[SIMKL Watching] open_homelander series URL: {homelander_url}", xbmc.LOGINFO)
-    xbmc.executebuiltin(f'ActivateWindow(10025,"{homelander_url}",return)')
-
-    if episode is not None and season is not None:
-        focus_episode_in_ui(episode, delay_before=1.2, delay_between=0.06)
-    return
+        xbmc.log(f"[SIMKL Watching] open_homelander seasons URL: {homelander_url}", xbmc.LOGINFO)
+        xbmc.executebuiltin(f'ActivateWindow(10025,"{homelander_url}",return)')
 
 
 # --------------------------
@@ -1094,7 +1094,7 @@ def show_season_episodes(params):
         hl_url = build_url(
             action="open_homelander",
             title=title, imdb=imdb_id, tmdb=tmdb_id, year=year,
-            next=code
+            next=code, ep_title=ep_title, air_date=air_date
         )
 
         ctx = [(
