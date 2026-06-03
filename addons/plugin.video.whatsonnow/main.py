@@ -289,7 +289,7 @@ def load_playlist_index(force: bool = False) -> dict:
         save_json(PLAYLIST_CACHE, index)
         return index
 
-    timeout_s = get_setting_int('playlist_timeout', 180)
+    timeout_s = get_setting_int('playlist_timeout', 600)
     retries = get_setting_int('playlist_retries', 3)
 
     if not base_url or not username or not password:
