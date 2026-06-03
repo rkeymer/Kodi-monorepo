@@ -14,7 +14,6 @@ from resources.lib.playlist import build_m3u_url, build_epg_url
 from resources.lib.playlist_fetch import fetch_url, parse_and_index
 from resources.lib.http import download_to_file
 from resources.lib.xmltv import extract_now_next_from_file, extract_schedule_from_file
-from resources.lib.vod_export import export_vod_episodes
 from resources.lib import log
 
 ADDON = xbmcaddon.Addon()
@@ -288,10 +287,6 @@ def load_playlist_index(force: bool = False) -> dict:
         index = parse_and_index(data, filter_fn=filter_fn, drop_vod=drop_vod)
         index['_meta'] = {'epg_url': epg_url}
         save_json(PLAYLIST_CACHE, index)
-        try:
-            export_vod_episodes(data)
-        except Exception as e:
-            log.warn(f"VOD export failed: {repr(e)}")
         return index
 
     timeout_s = get_setting_int('playlist_timeout', 180)
@@ -335,11 +330,6 @@ def load_playlist_index(force: bool = False) -> dict:
     index = parse_and_index(data, filter_fn=filter_fn, drop_vod=drop_vod)
     index['_meta'] = {'epg_url': epg_url}
     save_json(PLAYLIST_CACHE, index)
-
-    try:
-        export_vod_episodes(data)
-    except Exception as e:
-        log.warn(f"VOD export failed: {repr(e)}")
 
     tvg_present = sum(1 for ch in index.get('channels', []) if (ch.get('tvg_id') or '').strip())
     log.info(f"Playlist parsed: channels={len(index.get('channels', []))}, groups={len(index.get('groups', {}))}, tvg_ids={tvg_present}")
