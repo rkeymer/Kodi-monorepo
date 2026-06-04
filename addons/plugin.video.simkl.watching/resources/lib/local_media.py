@@ -110,6 +110,30 @@ class LocalMediaApi:
         _cache_lf.set(cache_key, list(available))
         return available
 
+    def get_available_episodes_with_paths(self, show_title, season):
+        """Returns {ep_num: file_path} for every local video file found in the season dir."""
+        cache_key = f"{show_title}:{season}:paths"
+        cached = _cache_lf.get(cache_key)
+        if cached is not None:
+            return {int(k): v for k, v in cached.items()}
+        show_dir = self._find_show_dir(show_title)
+        if not show_dir:
+            return {}
+        season_dir = self._find_season_dir(show_dir, int(season))
+        if not season_dir:
+            return {}
+        result = {}
+        try:
+            for fname in os.listdir(season_dir):
+                if _is_video(fname):
+                    se = _se_from_filename(fname)
+                    if se and se[0] == int(season):
+                        result[se[1]] = os.path.join(season_dir, fname)
+        except OSError as e:
+            _log(f"Error reading season dir: {e}")
+        _cache_lf.set(cache_key, {str(k): v for k, v in result.items()})
+        return result
+
     def find_episode(self, show_title, season, episode):
         show_dir = self._find_show_dir(show_title)
         if not show_dir:

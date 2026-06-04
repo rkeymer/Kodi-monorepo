@@ -3,7 +3,11 @@ import time
 import urllib.parse
 import urllib.request
 
+from resources.lib.cache import DiskCache
+
 API_BASE = "https://api.simkl.com"
+
+_cache_show = DiskCache("simkl_show", ttl=7 * 86400)  # 7 days — trailer/ids rarely change
 
 class SimklApi:
     def __init__(self, addon):
@@ -48,11 +52,17 @@ class SimklApi:
             data = json.loads(r.read().decode("utf-8"))
             return data
     def get_show_details_full(self, simkl_id: int):
-        """
-        Fetch show details with full metadata.
-        SIMKL supports extended=full for complete info.  [2](https://www.reddit.com/r/StremioAddons/comments/sw8ucz/sync_stremio_progress_to_trakt/)
-        """
-        return self._get(f"/tv/{simkl_id}", params={"extended": "full"}, auth=False)
+        key = str(simkl_id)
+        cached = _cache_show.get(key)
+        if cached is not None:
+            return cached
+        data = self._get(f"/tv/{simkl_id}", params={"extended": "full"}, auth=False)
+        _cache_show.set(key, data)
+        return data
+
+    def get_show_details_if_cached(self, simkl_id: int):
+        """Returns cached show details without a network call, or None."""
+        return _cache_show.get(str(simkl_id))
     # -------------------------
     # PIN / device flow (already working)
     # -------------------------
@@ -92,17 +102,7 @@ class SimklApi:
     # Step 4A: Watching items
     # -------------------------
     def get_watching_shows(self):
-        """
-        Fetch items from the user's SIMKL Watching list.
-
-        SIMKL exposes list-style endpoints under /sync/all-items/*
-        (commonly seen as /sync/all-items/shows/<listname> in other integrations). [4](https://www.reddit.com/r/sonarr/comments/10mf426/does_list_importing_from_simkl_work/)
-
-        We'll start with 'watching'. If SIMKL returns a different shape, debug logging will show it.
-        """
-        data = self._get("/sync/all-items/shows/watching", auth=True)
-
-        return data
+        return self._get("/sync/all-items/shows/watching", params={"extended": "full"}, auth=True)
 
     def get_plan_movies(self):
         """

@@ -58,12 +58,19 @@ def add_folder(label, action, icon=None):
     )
 
 
-def add_item(label, url="", info=None, art=None, is_folder=False, context_menu=None, label2=""):
+def add_item(label, url="", info=None, art=None, is_folder=False, context_menu=None, label2="", cast=None, is_playable=False):
     li = xbmcgui.ListItem(label=label, label2=label2)
+    if is_playable:
+        li.setProperty("IsPlayable", "true")
     if info:
         li.setInfo("video", info)
     if art:
         li.setArt(art)
+    if cast:
+        try:
+            li.setCast(cast)
+        except Exception:
+            pass
     if context_menu:
         li.addContextMenuItems(context_menu)
     xbmcplugin.addDirectoryItem(
@@ -309,10 +316,6 @@ def show_main_menu():
 
 
 def show_new_episodes():
-    """
-    NEW SORT RULE:
-      - Sort by last_watched_at (most recent first).
-    """
     xbmcplugin.setPluginCategory(HANDLE, "New Episodes")
     addon = xbmcaddon.Addon()
     api = SimklApi(addon)
@@ -344,7 +347,15 @@ def show_new_episodes():
             year = show.get("year", "")
             imdb_id = ids.get("imdb", "")
             tmdb_id = ids.get("tmdb", "")
+            simkl_id = ids.get("simkl", "")
             poster_path = show.get("poster")
+            overview = show.get("overview") or ""
+
+            # Ratings from extended=full response
+            ratings = show.get("ratings") or {}
+            simkl_r = ratings.get("simkl") or {}
+            simkl_rating = simkl_r.get("rating") or show.get("rating") or 0.0
+            simkl_votes = simkl_r.get("votes") or 0
 
             next_to_watch = it.get("next_to_watch")  # e.g. "S01E03" or None
             watched = it.get("watched_episodes_count") or 0
@@ -367,7 +378,7 @@ def show_new_episodes():
             last_watched_at = it.get("last_watched_at")
             last_dt = _parse_iso_utc_datetime(last_watched_at)
 
-            rows.append((last_dt, new_count, title, oldest, airdate, poster_path, imdb_id, tmdb_id, year))
+            rows.append((last_dt, new_count, title, oldest, airdate, poster_path, imdb_id, tmdb_id, year, simkl_id, overview, simkl_rating, simkl_votes))
 
         if not rows:
             add_item("You're all caught up ✅ (no aired unwatched episodes).")
@@ -384,8 +395,9 @@ def show_new_episodes():
         rows.sort(key=_sort_key)
 
         show_posters = addon.getSettingBool("show_posters")
+        tmdb_api = TmdbApi(addon)
 
-        for last_dt, new_count, title, oldest, airdate, poster_path, imdb_id, tmdb_id, year in rows:
+        for last_dt, new_count, title, oldest, airdate, poster_path, imdb_id, tmdb_id, year, simkl_id, overview, simkl_rating, simkl_votes in rows:
             if airdate:
                 label = f"{title} — {new_count} new — {oldest} ({airdate})"
             else:
@@ -406,10 +418,55 @@ def show_new_episodes():
                 year=year,
                 next=oldest if oldest != "unknown next episode" else "",
                 season_num=se[0] if se else 1,
-                simkl_poster=poster_path or ""
+                simkl_poster=poster_path or "",
+                simkl_id=simkl_id,
             )
 
-            add_item(label, url=url, info={"title": title}, art=art, is_folder=True)
+            # TMDB details — uses cache (2-day TTL), fetches only on first encounter
+            tmdb_vote_avg = None
+            if tmdb_id and tmdb_api.is_configured():
+                try:
+                    tmdb_det = tmdb_api.tv_details(int(tmdb_id))
+                    tmdb_vote_avg = tmdb_det.get("vote_average")
+                    if not overview:
+                        overview = tmdb_det.get("overview") or ""
+                except Exception as e:
+                    xbmc.log(f"[SIMKL Watching] TMDB tv_details failed for {title}: {e}", xbmc.LOGERROR)
+
+            # SIMKL show-details cache — last-resort for shows with no TMDB id
+            if not overview and simkl_id:
+                simkl_cached = api.get_show_details_if_cached(int(simkl_id))
+                if simkl_cached:
+                    overview = simkl_cached.get("overview") or ""
+                    if not simkl_rating:
+                        r = (simkl_cached.get("ratings") or {}).get("simkl") or {}
+                        simkl_rating = r.get("rating") or simkl_cached.get("rating") or 0.0
+                        simkl_votes = r.get("votes") or 0
+
+            # Build plot: overview + ratings footer
+            rating_parts = []
+            if simkl_rating:
+                votes_str = f"  ({simkl_votes:,})" if simkl_votes else ""
+                rating_parts.append(f"SIMKL  {simkl_rating:.1f}/10{votes_str}")
+            if tmdb_vote_avg:
+                rating_parts.append(f"TMDB  {tmdb_vote_avg:.1f}/10")
+            plot = overview
+            if rating_parts:
+                plot = (plot + "\n\n" if plot else "") + "  ·  ".join(rating_parts)
+
+            info = {"title": title, "tvshowtitle": title}
+            if plot:
+                info["plot"] = plot
+            if simkl_rating:
+                info["rating"] = float(simkl_rating)
+            if simkl_votes:
+                info["votes"] = str(simkl_votes)
+
+            ctx = [(
+                "Watch Trailer",
+                f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id)})",
+            )]
+            add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx)
 
         end_dir()
 
@@ -936,6 +993,7 @@ def show_seasons(params):
     year = params.get("year", "")
     next_ep = params.get("next", "")
     simkl_poster = params.get("simkl_poster", "")
+    simkl_id = params.get("simkl_id", "")
 
     se = parse_sxxexx(next_ep)
     current_season = se[0] if se else 1
@@ -984,7 +1042,7 @@ def show_seasons(params):
             action="show_season_episodes",
             title=title, imdb=imdb_id, tmdb=tmdb_id, year=year,
             next=next_ep, season_num=sn,
-            simkl_poster=simkl_poster
+            simkl_poster=simkl_poster, simkl_id=simkl_id,
         )
         add_item(label, url=url, art=art, is_folder=True)
 
@@ -1001,6 +1059,7 @@ def show_season_episodes(params):
     year = params.get("year", "")
     next_ep = params.get("next", "")
     simkl_poster = params.get("simkl_poster", "")
+    simkl_id = params.get("simkl_id", "")
 
     # season_num overrides the season from next_ep (used when browsing other seasons)
     se = parse_sxxexx(next_ep)
@@ -1017,9 +1076,10 @@ def show_season_episodes(params):
         return
 
     xbmcplugin.setPluginCategory(HANDLE, f"{title} — Season {season}")
+    xbmcplugin.setContent(HANDLE, "episodes")
     addon = xbmcaddon.Addon()
 
-    episodes = []  # list of (ep_num, ep_title, air_date, still_path)
+    episodes = []  # list of dicts; see TMDB extraction block below
     show_poster_url = simkl_poster_url(simkl_poster) if simkl_poster else None
 
     if tmdb_id:
@@ -1029,23 +1089,45 @@ def show_season_episodes(params):
                 season_data = tmdb.tv_season(int(tmdb_id), season)
                 for ep in season_data.get("episodes", []) or []:
                     ep_num = ep.get("episode_number")
-                    if ep_num:
-                        episodes.append((
-                            int(ep_num),
-                            ep.get("name") or f"Episode {ep_num}",
-                            ep.get("air_date") or "",
-                            ep.get("still_path"),
-                        ))
+                    if not ep_num:
+                        continue
+                    crew = ep.get("crew") or []
+                    guest_stars = ep.get("guest_stars") or []
+                    episodes.append({
+                        "ep_num": int(ep_num),
+                        "ep_title": ep.get("name") or f"Episode {ep_num}",
+                        "air_date": ep.get("air_date") or "",
+                        "still_path": ep.get("still_path"),
+                        "overview": ep.get("overview") or "",
+                        "vote_average": ep.get("vote_average") or 0.0,
+                        "vote_count": ep.get("vote_count") or 0,
+                        "runtime": ep.get("runtime"),
+                        "directors": [c["name"] for c in crew if c.get("job") == "Director"],
+                        "writers": [c["name"] for c in crew if c.get("job") in ("Writer", "Screenplay", "Story", "Teleplay")],
+                        "cast": [
+                            {
+                                "name": g["name"],
+                                "role": g.get("character") or "",
+                                "thumbnail": f"https://image.tmdb.org/t/p/w185{g['profile_path']}" if g.get("profile_path") else "",
+                            }
+                            for g in guest_stars
+                        ],
+                    })
         except Exception as e:
             xbmc.log(f"[SIMKL Watching] TMDB season fetch failed: {e}", xbmc.LOGERROR)
 
     if not episodes:
-        episodes = [(n, f"Episode {n}", "", None) for n in range(1, 27)]
+        episodes = [
+            {"ep_num": n, "ep_title": f"Episode {n}", "air_date": "", "still_path": None,
+             "overview": "", "vote_average": 0.0, "vote_count": 0, "runtime": None,
+             "directors": [], "writers": [], "cast": []}
+            for n in range(1, 27)
+        ]
 
     all_seasons_url = build_url(
         action="show_seasons",
         title=title, imdb=imdb_id, tmdb=tmdb_id, year=year,
-        next=next_ep, simkl_poster=simkl_poster
+        next=next_ep, simkl_poster=simkl_poster, simkl_id=simkl_id,
     )
     art_fallback = {"thumb": show_poster_url, "icon": show_poster_url} if show_poster_url else None
     add_item("« All Seasons", url=all_seasons_url, art=art_fallback, is_folder=True)
@@ -1059,18 +1141,30 @@ def show_season_episodes(params):
     except Exception as e:
         xbmc.log(f"[SIMKL Watching] AllDebrid availability check failed: {e}", xbmc.LOGERROR)
 
-    # Fetch local file availability
-    lf_available = set()
+    # Fetch local file availability — dict of {ep_num: file_path}
+    lf_available = {}
     try:
         lf_api = LocalMediaApi()
         if lf_api.is_configured():
-            lf_available = lf_api.get_available_episodes(title, season)
+            lf_available = lf_api.get_available_episodes_with_paths(title, season)
     except Exception as e:
         xbmc.log(f"[SIMKL Watching] Local media availability check failed: {e}", xbmc.LOGERROR)
 
     today = date.today()
 
-    for ep_num, ep_title, air_date, still_path in episodes:
+    for ep in episodes:
+        ep_num    = ep["ep_num"]
+        ep_title  = ep["ep_title"]
+        air_date  = ep["air_date"]
+        still_path = ep["still_path"]
+        overview   = ep["overview"]
+        vote_average = ep["vote_average"]
+        vote_count   = ep["vote_count"]
+        runtime      = ep["runtime"]
+        directors    = ep["directors"]
+        writers      = ep["writers"]
+        ep_cast      = ep["cast"]
+
         code = f"S{season:02d}E{ep_num:02d}"
 
         label = f"{code} — {ep_title}"
@@ -1097,26 +1191,57 @@ def show_season_episodes(params):
             next=code, ep_title=ep_title, air_date=air_date
         )
 
-        ctx = [(
-            "Play via AllDebrid",
-            f"RunPlugin({build_url(action='play_alldebrid', title=title, season=season, episode=ep_num)})"
-        )]
-        if ep_num in lf_available:
-            ctx.append((
-                "Play local file",
-                f"RunPlugin({build_url(action='play_local', title=title, season=season, episode=ep_num)})"
-            ))
+        # Default click: local file when available, otherwise Homelander
+        local_path = lf_available.get(ep_num)
+        if local_path:
+            default_url = local_path
+            is_playable = True
+        else:
+            default_url = hl_url
+            is_playable = False
 
         if ep_num in ad_available:
             label += "  [COLOR lime]● AD[/COLOR]"
-        if ep_num in lf_available:
+        if local_path:
             label += "  [COLOR dodgerblue]● LF[/COLOR]"
 
+        ctx = [
+            ("Play via AllDebrid", f"RunPlugin({build_url(action='play_alldebrid', title=title, season=season, episode=ep_num)})"),
+        ]
+        if local_path:
+            ctx.append(("Play local file", f"RunPlugin({build_url(action='play_local', title=title, season=season, episode=ep_num)})"))
+        ctx.append(("Play via Homelander", f"RunPlugin({hl_url})"))
+        if simkl_id:
+            ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id)})"))
+
+        info = {
+            "title": ep_title,
+            "tvshowtitle": title,
+            "episode": ep_num,
+            "season": season,
+        }
+        if overview:
+            info["plot"] = overview
+        if vote_average:
+            info["rating"] = float(vote_average)
+        if vote_count:
+            info["votes"] = str(vote_count)
+        if air_date:
+            info["premiered"] = air_date
+        if runtime:
+            info["duration"] = int(runtime) * 60
+        if directors:
+            info["director"] = ", ".join(directors)
+        if writers:
+            info["writer"] = ", ".join(writers)
+
         add_item(
-            label, url=hl_url,
-            info={"title": ep_title, "episode": ep_num, "season": season},
+            label, url=default_url,
+            info=info,
             art=art, context_menu=ctx,
-            is_folder=False
+            is_folder=False,
+            cast=ep_cast or None,
+            is_playable=is_playable,
         )
 
     end_dir()
@@ -1193,6 +1318,38 @@ def play_local(params):
 
 
 # --------------------------
+# Trailer playback
+# --------------------------
+def play_trailer(params):
+    title     = params.get("title", "")
+    simkl_id  = params.get("simkl_id", "")
+    addon     = xbmcaddon.Addon()
+    youtube_id = None
+
+    if simkl_id:
+        try:
+            api = SimklApi(addon)
+            details = api.get_show_details_full(int(simkl_id))
+            # SIMKL extended=full returns trailer as a bare YouTube video ID string
+            youtube_id = details.get("trailer") or details.get("youtube")
+            if not youtube_id:
+                for t in (details.get("trailers") or []):
+                    youtube_id = t.get("youtube") or t.get("id") if isinstance(t, dict) else None
+                    if youtube_id:
+                        break
+        except Exception as e:
+            xbmc.log(f"[SIMKL Watching] Trailer lookup failed: {e}", xbmc.LOGERROR)
+
+    if youtube_id:
+        xbmc.log(f"[SIMKL Watching] Playing trailer youtube_id={youtube_id} for {title}", xbmc.LOGINFO)
+        xbmc.executebuiltin(f'RunPlugin("plugin://plugin.video.youtube/play/?video_id={youtube_id}")')
+    else:
+        xbmc.log(f"[SIMKL Watching] No SIMKL trailer for {title!r}, falling back to YouTube search", xbmc.LOGINFO)
+        q = urllib.parse.quote(f"{title} official trailer")
+        xbmc.executebuiltin(f'ActivateWindow(10025,"plugin://plugin.video.youtube/kodion/search/query/?q={q}",return)')
+
+
+# --------------------------
 # Router
 # --------------------------
 def router():
@@ -1222,6 +1379,8 @@ def router():
         show_seasons(params)
     elif action == "show_season_episodes":
         show_season_episodes(params)
+    elif action == "play_trailer":
+        play_trailer(params)
     elif action == "open_homelander":
         open_homelander(params)
     elif action == "play_alldebrid":
