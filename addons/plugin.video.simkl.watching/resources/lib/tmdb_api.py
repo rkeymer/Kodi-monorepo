@@ -7,7 +7,7 @@ from resources.lib.cache import DiskCache
 TMDB_API_BASE = "https://api.themoviedb.org/3"
 
 _cache_season = DiskCache("tmdb_season", ttl=86400)  # 24 h — episode lists rarely change
-_cache_tv     = DiskCache("tmdb_tv",     ttl=21600)  # 6 h  — next_episode_to_air updates
+_cache_tv     = DiskCache("tmdb_tv",     ttl=172800) # 2 days
 _cache_movie  = DiskCache("tmdb_movie",  ttl=86400)  # 24 h
 
 
@@ -48,6 +48,10 @@ class TmdbApi:
     # -------------------------
     # TV endpoints
     # -------------------------
+
+    def tv_details_if_cached(self, tmdb_tv_id: int, language="en-US"):
+        """Returns cached TV details without making a network call, or None."""
+        return _cache_tv.get(f"{tmdb_tv_id}:{language}")
 
     def tv_details(self, tmdb_tv_id: int, language="en-US"):
         key = f"{tmdb_tv_id}:{language}"

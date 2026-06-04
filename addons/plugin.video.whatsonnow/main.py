@@ -18,6 +18,7 @@ from resources.lib import log
 
 ADDON = xbmcaddon.Addon()
 HANDLE = int(sys.argv[1])
+MEDIA_PATH = os.path.join(ADDON.getAddonInfo('path'), 'resources', 'media')
 
 PROFILE_DIR = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 CACHE_DIR = os.path.join(PROFILE_DIR, 'cache')
@@ -236,14 +237,16 @@ def update_recent_from_entry(entry: dict):
 
 
 def _add_separator(title: str):
-    li = xbmcgui.ListItem(title)
+    li = xbmcgui.ListItem(f'[B][COLOR gold]{title}[/COLOR][/B]')
     li.setProperty('IsPlayable', 'false')
+    li.setArt({'icon': 'DefaultFolder.png', 'thumb': ''})
     xbmcplugin.addDirectoryItem(HANDLE, '', li, False)
 
 
 def _add_spacer():
-    li = xbmcgui.ListItem(' ')
+    li = xbmcgui.ListItem(' ')
     li.setProperty('IsPlayable', 'false')
+    li.setArt({'icon': 'DefaultAddonNone.png', 'thumb': ''})
     xbmcplugin.addDirectoryItem(HANDLE, '', li, False)
 
 
@@ -441,7 +444,7 @@ def _add_channel_item(ch: dict, index_i: int = None, epg_map: dict = None, url_o
         else:
             cm.append(('Add to favourites', f"RunPlugin({build_url({'action':'fav_add_url','u':url,'n':name})})"))
 
-    li.addContextMenuItems(cm)
+    li.addContextMenuItems(cm, replaceItems=True)
 
     # Playback route
     if index_i is not None:
@@ -452,10 +455,12 @@ def _add_channel_item(ch: dict, index_i: int = None, epg_map: dict = None, url_o
     xbmcplugin.addDirectoryItem(HANDLE, play_url, li, False)
 
 
+_INDENT = ' ' * 6  # non-breaking spaces — Kodi strips regular leading spaces
+
 def _add_programme_item(channel_play_url: str, programme_title: str, start_epoch: int, stop_epoch: int, logo: str = ''):
     st = _fmt_hhmm(start_epoch)
     sp = _fmt_hhmm(stop_epoch)
-    label = f" {programme_title} {st}-{sp}"
+    label = f"{_INDENT}{programme_title}  {st}–{sp}"
     li = xbmcgui.ListItem(label)
     li.setProperty('IsPlayable', 'true')
     if logo:
@@ -477,17 +482,20 @@ def list_tools():
 def list_root():
     xbmcplugin.setPluginCategory(HANDLE, 'WhatsOnNow')
     items = [
-        ('On Now', {'action': 'on_now'}, True),
-        ('Coming Up (Next hours)', {'action': 'coming_up'}, True),
-        ('Favourites', {'action': 'favs'}, True),
-        ('Recently Watched', {'action': 'recent'}, True),
-        ('Groups', {'action': 'groups'}, True),
-        ('Search', {'action': 'search'}, True),
-        ('All Channels (paged)', {'action': 'all', 'start': '0'}, True),
-        ('Tools / Diagnostics', {'action': 'tools'}, True),
+        ('On Now',                {'action': 'on_now'},             'on_now.png'),
+        ('Coming Up (Next hours)',{'action': 'coming_up'},          'coming_up.png'),
+        ('Favourites',            {'action': 'favs'},               'favourites.png'),
+        ('Recently Watched',      {'action': 'recent'},             'recently_watched.png'),
+        ('Groups',                {'action': 'groups'},             'groups.png'),
+        ('Search',                {'action': 'search'},             'search.png'),
+        ('All Channels (paged)',  {'action': 'all', 'start': '0'},  'all_channels.png'),
+        ('Tools / Diagnostics',   {'action': 'tools'},              'tools_diagnostics.png'),
     ]
-    for label, query, is_folder in items:
-        xbmcplugin.addDirectoryItem(HANDLE, build_url(query), xbmcgui.ListItem(label), is_folder)
+    for label, query, icon_file in items:
+        li = xbmcgui.ListItem(label)
+        icon = os.path.join(MEDIA_PATH, icon_file)
+        li.setArt({'icon': icon, 'thumb': icon})
+        xbmcplugin.addDirectoryItem(HANDLE, build_url(query), li, True)
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -579,7 +587,9 @@ def list_on_now():
             _add_channel_item(ch, index_i=None, epg_map=epg, url_override=ru)
 
     _add_spacer()
-    xbmcplugin.addDirectoryItem(HANDLE, build_url({'action':'coming_up'}), xbmcgui.ListItem('Coming Up (Next hours)'), True)
+    _coming_up_li = xbmcgui.ListItem('[B][COLOR gold]Coming Up (Next hours)[/COLOR][/B]')
+    _coming_up_li.setArt({'icon': os.path.join(MEDIA_PATH, 'coming_up.png'), 'thumb': os.path.join(MEDIA_PATH, 'coming_up.png')})
+    xbmcplugin.addDirectoryItem(HANDLE, build_url({'action':'coming_up'}), _coming_up_li, True)
     _add_spacer()
 
     _add_separator('— On Now —')
@@ -626,9 +636,9 @@ def list_coming_up():
         xbmcplugin.endOfDirectory(HANDLE)
         return
 
-    epg_path = get_setting('local_epg_path', '')
-    if not epg_path or not xbmcvfs.exists(epg_path):
-        xbmcgui.Dialog().ok('WhatsOnNow', 'Local EPG file not found. Ensure epg.xml exists at the configured path.')
+    epg_path = get_setting('local_epg_path', '') or 'special://profile/addon_data/plugin.video.whatsonnow/epg.xml'
+    if not xbmcvfs.exists(epg_path):
+        xbmcgui.Dialog().ok('WhatsOnNow', 'EPG data not available yet. Open "On Now" first to fetch the EPG, then try again.')
         xbmcplugin.endOfDirectory(HANDLE)
         return
 
@@ -639,10 +649,12 @@ def list_coming_up():
     schedules = extract_schedule_from_file(epg_path, wanted, now, end_epoch, max_per_channel=50)
 
     for ch in pinned:
-        header = xbmcgui.ListItem(ch['name'])
+        header = xbmcgui.ListItem(f"[B]{ch['name']}[/B]")
         header.setProperty('IsPlayable', 'false')
         if ch['logo']:
             header.setArt({'thumb': ch['logo'], 'icon': ch['logo']})
+        else:
+            header.setArt({'icon': 'DefaultFolder.png', 'thumb': ''})
         xbmcplugin.addDirectoryItem(HANDLE, '', header, False)
 
         if ch['i'] is not None:
@@ -652,7 +664,7 @@ def list_coming_up():
 
         progs = schedules.get(ch['tvg_id'], [])
         if not progs:
-            li = xbmcgui.ListItem(' (No upcoming programmes in this window)')
+            li = xbmcgui.ListItem(f'{_INDENT}(No upcoming programmes in this window)')
             li.setProperty('IsPlayable', 'false')
             xbmcplugin.addDirectoryItem(HANDLE, '', li, False)
             _add_spacer()
@@ -675,7 +687,7 @@ def do_search():
     max_results = get_setting_int('max_search_results', 200)
     q = xbmcgui.Dialog().input('Search channels', type=xbmcgui.INPUT_ALPHANUM)
     if not q:
-        xbmcplugin.endOfDirectory(HANDLE)
+        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
 
     ql = q.lower().strip()
