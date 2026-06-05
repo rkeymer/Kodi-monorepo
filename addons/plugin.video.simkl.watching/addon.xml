@@ -2,7 +2,7 @@
 <addon
     id="plugin.video.simkl.watching"
     name="WhatsUpNext"
-    version="0.4.0"
+    version="0.4.1"
     provider-name="Personal">
 
     <requires>
