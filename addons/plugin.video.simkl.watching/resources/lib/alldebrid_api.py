@@ -73,12 +73,12 @@ def _score(norm_title, norm_mag):
 
 
 def _flatten_tree(nodes):
-    """Recursively flatten AllDebrid file tree into (filename, link) tuples."""
+    """Recursively flatten AllDebrid file tree into (filename, link, size) tuples."""
     for node in nodes:
         if "e" in node:
             yield from _flatten_tree(node["e"])
         elif "l" in node:
-            yield node["n"], node["l"]
+            yield node["n"], node["l"], node.get("s", 0)
 
 
 class AllDebridApi:
@@ -166,7 +166,7 @@ class AllDebridApi:
 
         for _, mag in scored[:6]:  # cap at 6 magnets to keep it fast
             files = self._get_magnet_files(mag["id"])
-            for fname, _ in files:
+            for fname, _, _sz in files:
                 se = _se_from_filename(fname)
                 if se and se[0] == target_season and _is_video(fname):
                     available.add(se[1])
@@ -200,7 +200,7 @@ class AllDebridApi:
         scored.sort(key=lambda x: -x[0])
         for title_score, mag in scored:
             files = self._get_magnet_files(mag["id"])
-            for fname, link in files:
+            for fname, link, _sz in files:
                 se = _se_from_filename(fname)
                 if _is_video(fname) and se == target:
                     _log(f"Episode match: '{fname}' in magnet '{mag['filename']}'")

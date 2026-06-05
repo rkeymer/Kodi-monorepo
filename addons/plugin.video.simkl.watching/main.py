@@ -310,6 +310,7 @@ def show_main_menu():
     add_folder("New Episodes", "new", icon=f"{MEDIA_PATH}/new.png")
     add_folder("Upcoming Episodes", "upcoming", icon=f"{MEDIA_PATH}/upcoming.png")
     add_folder("Movies", "movies", icon=f"{MEDIA_PATH}/movies.png")
+    add_folder("AllDebrid", "alldebrid_menu", icon=f"{MEDIA_PATH}/alldebrid.png")
     add_folder("Search", "search_menu", icon=f"{MEDIA_PATH}/search.png")
     add_folder("Settings / Help", "help", icon=f"{MEDIA_PATH}/help.png")
     end_dir()
@@ -1247,6 +1248,148 @@ def show_season_episodes(params):
     end_dir()
 
 
+_AD_VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts", ".m2ts"}
+
+
+def _ad_is_video(filename):
+    ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+    return ext in _AD_VIDEO_EXTS
+
+
+# --------------------------
+# AllDebrid browser
+# --------------------------
+def show_alldebrid_menu():
+    xbmcplugin.setPluginCategory(HANDLE, "AllDebrid")
+    ad = AllDebridApi()
+    if not ad.is_configured():
+        add_item("AllDebrid API key not set — configure in Settings.")
+        end_dir()
+        return
+    magnets = ad._get_all_magnets()
+    add_folder("[COLOR yellow]In Progress[/COLOR]", "alldebrid_inprogress")
+    add_folder("[COLOR yellow]Errors[/COLOR]", "alldebrid_errors")
+    ready = [m for m in magnets if m.get("statusCode", -1) == 4]
+    for m in ready:
+        label = m.get("filename", f"Magnet {m.get('id', '?')}")
+        size_str = _fmt_bytes(m.get("size", 0))
+        url = build_url(action="alldebrid_magnet_files", magnet_id=str(m["id"]), label=label)
+        li = xbmcgui.ListItem(label=label, label2=size_str)
+        li.setArt({"icon": f"{MEDIA_PATH}/magnet.png", "thumb": f"{MEDIA_PATH}/magnet.png"})
+        xbmcplugin.addDirectoryItem(HANDLE, url, li, isFolder=True)
+    if not ready:
+        add_item("No ready magnets.")
+    end_dir()
+
+
+def _fmt_bytes(n):
+    if not n:
+        return "0 B"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+
+def show_alldebrid_inprogress():
+    xbmcplugin.setPluginCategory(HANDLE, "AllDebrid / In Progress")
+    ad = AllDebridApi()
+    if not ad.is_configured():
+        add_item("AllDebrid API key not set — configure in Settings.")
+        end_dir()
+        return
+    in_progress = [m for m in ad._get_all_magnets() if m.get("statusCode", -1) in (0, 1, 2, 3)]
+    if not in_progress:
+        add_item("No magnets in progress.")
+        end_dir()
+        return
+    for m in in_progress:
+        label = m.get("filename", f"Magnet {m.get('id', '?')}")
+        size = m.get("size", 0)
+        downloaded = m.get("downloaded", 0)
+        speed = m.get("speed", 0)
+        pct = m.get("completionPercent") or (round(downloaded / size * 100, 1) if size else 0)
+        parts = [_fmt_bytes(size)]
+        if pct:
+            parts.append(f"{pct}%")
+        if speed:
+            parts.append(f"{_fmt_bytes(speed)}/s")
+        detail = " | ".join(parts)
+        li = xbmcgui.ListItem(label=label, label2=detail)
+        xbmcplugin.addDirectoryItem(HANDLE, build_url(action="alldebrid_inprogress"), li, isFolder=False)
+    end_dir()
+
+
+def show_alldebrid_errors():
+    xbmcplugin.setPluginCategory(HANDLE, "AllDebrid / Errors")
+    ad = AllDebridApi()
+    if not ad.is_configured():
+        add_item("AllDebrid API key not set — configure in Settings.")
+        end_dir()
+        return
+    errors = [m for m in ad._get_all_magnets() if m.get("statusCode", -1) >= 5]
+    if not errors:
+        add_item("No errored magnets.")
+        end_dir()
+        return
+    for m in errors:
+        label = m.get("filename", f"Magnet {m.get('id', '?')}")
+        add_item(label, label2=m.get("error") or m.get("status") or "Error")
+    end_dir()
+
+
+def show_alldebrid_magnet_files(params):
+    magnet_id = params.get("magnet_id", "")
+    parent_label = params.get("label", f"Magnet {magnet_id}")
+    xbmcplugin.setPluginCategory(HANDLE, f"AllDebrid / {parent_label}")
+    ad = AllDebridApi()
+    try:
+        files = ad._get_magnet_files(int(magnet_id))
+    except Exception as e:
+        xbmc.log(f"[SIMKL Watching][AllDebrid] magnet files error: {e}", xbmc.LOGERROR)
+        add_item("Failed to load files.")
+        end_dir()
+        return
+    video_files = [(fname, link, size) for fname, link, size in files if _ad_is_video(fname)]
+    if not video_files:
+        add_item("No video files in this magnet.")
+        end_dir()
+        return
+    for fname, link, size in video_files:
+        display = fname.rsplit("/", 1)[-1]
+        size_str = _fmt_bytes(size) if size else ""
+        url = build_url(action="play_alldebrid_link", link=link, title=display)
+        li = xbmcgui.ListItem(label=display, label2=size_str)
+        li.setProperty("IsPlayable", "true")
+        xbmcplugin.addDirectoryItem(HANDLE, url, li, isFolder=False)
+    end_dir()
+
+
+def play_alldebrid_link(params):
+    link = params.get("link", "")
+    title = params.get("title", "")
+    if not link:
+        xbmcgui.Dialog().notification("AllDebrid", "No link provided", xbmcgui.NOTIFICATION_ERROR, 3000)
+        return
+    ad = AllDebridApi()
+    if not ad.is_configured():
+        xbmcgui.Dialog().notification("AllDebrid", "API key not set — add it in Settings", xbmcgui.NOTIFICATION_WARNING, 3000)
+        return
+    try:
+        stream_url = ad.unlock_link(link)
+    except Exception as e:
+        xbmc.log(f"[SIMKL Watching][AllDebrid] unlock error: {e}", xbmc.LOGERROR)
+        stream_url = None
+    if not stream_url:
+        xbmcgui.Dialog().notification("AllDebrid", f"Failed to unlock: {title}", xbmcgui.NOTIFICATION_ERROR, 3000)
+        return
+    li = xbmcgui.ListItem(label=title, path=stream_url)
+    li.setInfo("video", {"title": title})
+    li.setProperty("IsPlayable", "true")
+    xbmc.Player().play(stream_url, li)
+
+
 # --------------------------
 # AllDebrid playback
 # --------------------------
@@ -1383,6 +1526,16 @@ def router():
         play_trailer(params)
     elif action == "open_homelander":
         open_homelander(params)
+    elif action == "alldebrid_menu":
+        show_alldebrid_menu()
+    elif action == "alldebrid_inprogress":
+        show_alldebrid_inprogress()
+    elif action == "alldebrid_errors":
+        show_alldebrid_errors()
+    elif action == "alldebrid_magnet_files":
+        show_alldebrid_magnet_files(params)
+    elif action == "play_alldebrid_link":
+        play_alldebrid_link(params)
     elif action == "play_alldebrid":
         play_alldebrid(params)
     elif action == "play_local":
