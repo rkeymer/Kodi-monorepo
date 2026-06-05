@@ -1366,15 +1366,44 @@ def show_alldebrid_magnet_files(params):
     end_dir()
 
 
+_AD_MIME = {
+    ".mkv": "video/x-matroska",
+    ".mp4": "video/mp4",
+    ".avi": "video/x-msvideo",
+    ".m4v": "video/mp4",
+    ".mov": "video/quicktime",
+    ".wmv": "video/x-ms-wmv",
+    ".ts":  "video/mp2t",
+    ".m2ts": "video/mp2t",
+}
+
+
+def _ad_resolve_and_play(stream_url, title, use_resolved_url=False):
+    """Shared playback helper for AllDebrid streams."""
+    ext = ("." + title.rsplit(".", 1)[-1].lower()) if "." in title else ""
+    mime = _AD_MIME.get(ext, "")
+    li = xbmcgui.ListItem(label=title, path=stream_url)
+    li.setInfo("video", {"title": title})
+    li.setContentLookup(False)
+    if mime:
+        li.setMimeType(mime)
+    if use_resolved_url:
+        xbmcplugin.setResolvedUrl(HANDLE, True, li)
+    else:
+        xbmc.Player().play(stream_url, li)
+
+
 def play_alldebrid_link(params):
     link = params.get("link", "")
     title = params.get("title", "")
     if not link:
         xbmcgui.Dialog().notification("AllDebrid", "No link provided", xbmcgui.NOTIFICATION_ERROR, 3000)
+        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
         return
     ad = AllDebridApi()
     if not ad.is_configured():
         xbmcgui.Dialog().notification("AllDebrid", "API key not set — add it in Settings", xbmcgui.NOTIFICATION_WARNING, 3000)
+        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
         return
     try:
         stream_url = ad.unlock_link(link)
@@ -1383,11 +1412,9 @@ def play_alldebrid_link(params):
         stream_url = None
     if not stream_url:
         xbmcgui.Dialog().notification("AllDebrid", f"Failed to unlock: {title}", xbmcgui.NOTIFICATION_ERROR, 3000)
+        xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
         return
-    li = xbmcgui.ListItem(label=title, path=stream_url)
-    li.setInfo("video", {"title": title})
-    li.setProperty("IsPlayable", "true")
-    xbmc.Player().play(stream_url, li)
+    _ad_resolve_and_play(stream_url, title, use_resolved_url=True)
 
 
 # --------------------------
@@ -1421,10 +1448,7 @@ def play_alldebrid(params):
         return
 
     label = fname or f"{title} S{season:02d}E{episode:02d}"
-    li = xbmcgui.ListItem(label=label, path=stream_url)
-    li.setInfo("video", {"title": label})
-    li.setProperty("IsPlayable", "true")
-    xbmc.Player().play(stream_url, li)
+    _ad_resolve_and_play(stream_url, label)
 
 
 # --------------------------
