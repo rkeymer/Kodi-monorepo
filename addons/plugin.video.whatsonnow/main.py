@@ -499,27 +499,58 @@ def list_root():
     xbmcplugin.endOfDirectory(HANDLE)
 
 
+def _index_by_url(channels):
+    by_url = {}
+    for i, ch in enumerate(channels):
+        u = ch.get('url') or ''
+        if u:
+            by_url[u] = (i, ch)
+    return by_url
+
+
+def _add_saved_item(entry: dict, by_url: dict, epg_map: dict):
+    """Render a favourite/recent entry with the live EPG 'now' title.
+
+    If the saved URL still exists in the current playlist, use the live channel
+    (so we pick up its tvg_id/logo and the current programme even for entries
+    saved before tvg_id capture); otherwise fall back to the stored fields.
+    """
+    su = entry.get('url') or ''
+    if su in by_url:
+        i, ch = by_url[su]
+        _add_channel_item(ch, index_i=i, epg_map=epg_map)
+    else:
+        ch = {'name': entry.get('name'), 'url': su, 'tvg_id': entry.get('tvg_id', ''), 'logo': entry.get('logo', ''), 'group': entry.get('group', '')}
+        _add_channel_item(ch, index_i=None, epg_map=epg_map, url_override=su)
+
+
 def list_favourites():
     favs = load_favourites()
+    idx = load_playlist_index(force=False)
+    epg = load_epg_now_next(force=False, playlist_index=idx)
+    by_url = _index_by_url(idx.get('channels', []))
+
     li = xbmcgui.ListItem('Clear favourites')
     li.setProperty('IsPlayable', 'false')
     xbmcplugin.addDirectoryItem(HANDLE, build_url({'action':'fav_clear'}), li, False)
     _add_spacer()
     for f in favs:
-        ch = {'name': f.get('name'), 'url': f.get('url'), 'tvg_id': f.get('tvg_id',''), 'logo': f.get('logo',''), 'group': f.get('group','')}
-        _add_channel_item(ch, index_i=None, epg_map=None, url_override=f.get('url'))
+        _add_saved_item(f, by_url, epg)
     xbmcplugin.endOfDirectory(HANDLE)
 
 
 def list_recent():
     rec = load_recent()
+    idx = load_playlist_index(force=False)
+    epg = load_epg_now_next(force=False, playlist_index=idx)
+    by_url = _index_by_url(idx.get('channels', []))
+
     li = xbmcgui.ListItem('Clear recently watched')
     li.setProperty('IsPlayable', 'false')
     xbmcplugin.addDirectoryItem(HANDLE, build_url({'action':'recent_clear'}), li, False)
     _add_spacer()
     for r in rec:
-        ch = {'name': r.get('name'), 'url': r.get('url'), 'tvg_id': r.get('tvg_id',''), 'logo': r.get('logo',''), 'group': r.get('group','')}
-        _add_channel_item(ch, index_i=None, epg_map=None, url_override=r.get('url'))
+        _add_saved_item(r, by_url, epg)
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -680,17 +711,44 @@ def list_coming_up():
 
 
 def do_search():
+    """Prompt for a query, then redirect to a stable results container.
+
+    Rendering the results under their own re-enterable URL (search_results&q=...)
+    - instead of directly under action=search - means stopping/exiting playback
+    returns to the results list rather than re-opening the input dialog (which
+    would otherwise drop the user out to Files).
+    """
+    q = xbmcgui.Dialog().input('Search channels', type=xbmcgui.INPUT_ALPHANUM)
+    if not q or not q.strip():
+        # Cancel the pending directory cleanly so Kodi stays on the menu.
+        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
+        return
+
+    # Redirect to the stable results container (search_results&q=...), which is a
+    # real, cached, re-enterable directory - so stopping playback returns to the
+    # results instead of dropping out to Files.
+    #
+    # Ordering matters: queue the Container.Update, then end THIS directory as
+    # succeeded=True (empty). A *failed* search directory makes Kodi run its
+    # "listing failed -> jump to parent" navigation, which races - and beats - the
+    # queued update, bouncing the user back to root (the bug just observed in the
+    # log). Ending successfully removes that competing navigation, so the redirect
+    # deterministically wins. 'replace' drops the transient prompt from history so
+    # Back from results goes to the menu, not back into the keyboard. cacheToDisc
+    # is off so the empty prompt listing is never cached in place of results.
+    results_url = build_url({'action': 'search_results', 'q': q.strip()})
+    xbmc.executebuiltin('Container.Update(%s,replace)' % results_url)
+    xbmcplugin.endOfDirectory(HANDLE, succeeded=True, cacheToDisc=False)
+
+
+def list_search_results(q: str):
     idx = load_playlist_index(force=False)
     epg = load_epg_now_next(force=False, playlist_index=idx)
     channels = idx.get('channels', [])
 
+    xbmcplugin.setPluginCategory(HANDLE, 'Search: %s' % q)
     max_results = get_setting_int('max_search_results', 200)
-    q = xbmcgui.Dialog().input('Search channels', type=xbmcgui.INPUT_ALPHANUM)
-    if not q:
-        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
-        return
-
-    ql = q.lower().strip()
+    ql = (q or '').lower().strip()
     hits = 0
 
     for i, ch in enumerate(channels):
@@ -700,7 +758,19 @@ def do_search():
             if hits >= max_results:
                 break
 
+    if hits == 0:
+        li = xbmcgui.ListItem('No matches for "%s" - search again' % q)
+        li.setProperty('IsPlayable', 'false')
+        li.setArt({'icon': os.path.join(MEDIA_PATH, 'search.png'), 'thumb': os.path.join(MEDIA_PATH, 'search.png')})
+        xbmcplugin.addDirectoryItem(HANDLE, build_url({'action': 'search'}), li, True)
+
     xbmcplugin.endOfDirectory(HANDLE)
+
+
+def _resolve_fail():
+    # Always resolve the play request - even on failure - so Kodi does not hang
+    # waiting on a stream that never arrives and drop navigation out to Files.
+    xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
 
 
 def play_channel_by_index(i: str):
@@ -710,15 +780,15 @@ def play_channel_by_index(i: str):
     try:
         ii = int(i)
     except Exception:
-        return
+        _resolve_fail(); return
 
     if ii < 0 or ii >= len(channels):
-        return
+        _resolve_fail(); return
 
     ch = channels[ii]
     url = ch.get('url')
     if not url:
-        return
+        _resolve_fail(); return
 
     update_recent_from_entry(channel_to_entry(ch))
 
@@ -730,7 +800,7 @@ def play_channel_by_index(i: str):
 def play_channel_by_url(url: str, name: str = ''):
     url = url or ''
     if not url:
-        return
+        _resolve_fail(); return
 
     update_recent_from_entry({'name': name or url, 'url': url, 'tvg_id': '', 'logo': '', 'group': ''})
 
@@ -874,6 +944,8 @@ def router(paramstring: str):
         list_all_channels(int(params.get('start','0') or '0'))
     elif action == 'search':
         do_search()
+    elif action == 'search_results':
+        list_search_results(params.get('q', ''))
     elif action == 'play':
         play_channel_by_index(params.get('i',''))
     elif action == 'play_url':
