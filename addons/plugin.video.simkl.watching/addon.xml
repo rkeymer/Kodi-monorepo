@@ -2,11 +2,12 @@
 <addon
     id="plugin.video.simkl.watching"
     name="WhatsUpNext"
-    version="0.4.2"
+    version="0.4.3"
     provider-name="Personal">
 
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
+        <import addon="service.homelander.packfix" version="1.0.0"/>
     </requires>
 
     <extension
