@@ -30,6 +30,7 @@ ADDON_DATA_DIR = xbmcvfs.translatePath('special://profile/addon_data/plugin.vide
 FAVS_PATH = os.path.join(ADDON_DATA_DIR, 'favourites.json')
 RECENT_PATH = os.path.join(ADDON_DATA_DIR, 'recent.json')
 STATE_PATH = os.path.join(ADDON_DATA_DIR, 'update_state.json')
+SEARCH_STATE_PATH = os.path.join(ADDON_DATA_DIR, 'last_search.json')
 
 
 def get_setting(setting_id: str, default: str = '') -> str:
@@ -138,6 +139,14 @@ def save_recent(items):
 
 def clear_recent():
     save_recent([])
+
+
+def load_last_search_query() -> str:
+    return (_load_list(SEARCH_STATE_PATH, {}) or {}).get('q', '')
+
+
+def save_last_search_query(q: str):
+    _save_list(SEARCH_STATE_PATH, {'q': q})
 
 
 def clear_favourites():
@@ -482,20 +491,32 @@ def list_tools():
 def list_root():
     xbmcplugin.setPluginCategory(HANDLE, 'WhatsOnNow')
     items = [
-        ('On Now',                {'action': 'on_now'},             'on_now.png'),
-        ('Coming Up (Next hours)',{'action': 'coming_up'},          'coming_up.png'),
-        ('Favourites',            {'action': 'favs'},               'favourites.png'),
-        ('Recently Watched',      {'action': 'recent'},             'recently_watched.png'),
-        ('Groups',                {'action': 'groups'},             'groups.png'),
-        ('Search',                {'action': 'search'},             'search.png'),
-        ('All Channels (paged)',  {'action': 'all', 'start': '0'},  'all_channels.png'),
-        ('Tools / Diagnostics',   {'action': 'tools'},              'tools_diagnostics.png'),
+        ('On Now',                {'action': 'on_now'},             'on_now.png',            True),
+        ('Coming Up (Next hours)',{'action': 'coming_up'},          'coming_up.png',         True),
+        ('Favourites',            {'action': 'favs'},               'favourites.png',        True),
+        ('Recently Watched',      {'action': 'recent'},             'recently_watched.png',  True),
+        ('Groups',                {'action': 'groups'},             'groups.png',            True),
+        # Search is a non-folder (script) action, not a directory: it needs to
+        # prompt via Dialog().input() and then navigate to the results view
+        # with Container.Update. Doing that from a folder item means Kodi is
+        # still mid-flight servicing THIS action's own GetDirectory request
+        # when the redirect fires, which races the in-flight request and was
+        # reproduced live as a silent no-op (search prompt completes, no
+        # results navigation ever happens - confirmed in kodi.log across a
+        # full Kodi restart). A non-folder item invokes main.py as a plain
+        # script call, same as the already-reliable fav_clear/recent_clear
+        # actions below, with no pending directory to race against.
+        ('Search',                {'action': 'search'},             'search.png',            False),
+        ('All Channels (paged)',  {'action': 'all', 'start': '0'},  'all_channels.png',      True),
+        ('Tools / Diagnostics',   {'action': 'tools'},              'tools_diagnostics.png', True),
     ]
-    for label, query, icon_file in items:
+    for label, query, icon_file, is_folder in items:
         li = xbmcgui.ListItem(label)
         icon = os.path.join(MEDIA_PATH, icon_file)
         li.setArt({'icon': icon, 'thumb': icon})
-        xbmcplugin.addDirectoryItem(HANDLE, build_url(query), li, True)
+        if not is_folder:
+            li.setProperty('IsPlayable', 'false')
+        xbmcplugin.addDirectoryItem(HANDLE, build_url(query), li, is_folder)
     xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -711,44 +732,59 @@ def list_coming_up():
 
 
 def do_search():
-    """Prompt for a query, then redirect to a stable results container.
+    """Prompt for a query, persist it, then navigate to the dialog-free results view.
 
-    Rendering the results under their own re-enterable URL (search_results&q=...)
-    - instead of directly under action=search - means stopping/exiting playback
-    returns to the results list rather than re-opening the input dialog (which
-    would otherwise drop the user out to Files).
+    This is registered in list_root() as a non-folder action, so it runs as a
+    plain script invocation - not while Kodi is mid-flight servicing a
+    GetDirectory request for this same URL. Two earlier versions tried to
+    redirect (Container.Update) from within a folder/GetDirectory invocation
+    of this action; that races Kodi's own in-flight directory handling and
+    was reproduced live as a silent no-op - the search prompt would complete
+    with no subsequent results navigation at all, confirmed in kodi.log
+    across a full Kodi restart. As a non-folder action there is no pending
+    directory to race against, so this behaves like the already-reliable
+    Container.Refresh calls elsewhere in this file (e.g. fav_clear).
+
+    The query itself is persisted rather than passed in the results URL so
+    that list_search_results always shows the freshest saved query no matter
+    when/how it gets (re)loaded - including a silent reload after Stop.
     """
     q = xbmcgui.Dialog().input('Search channels', type=xbmcgui.INPUT_ALPHANUM)
     if not q or not q.strip():
-        # Cancel the pending directory cleanly so Kodi stays on the menu.
-        xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
 
-    # Redirect to the stable results container (search_results&q=...), which is a
-    # real, cached, re-enterable directory - so stopping playback returns to the
-    # results instead of dropping out to Files.
-    #
-    # Ordering matters: queue the Container.Update, then end THIS directory as
-    # succeeded=True (empty). A *failed* search directory makes Kodi run its
-    # "listing failed -> jump to parent" navigation, which races - and beats - the
-    # queued update, bouncing the user back to root (the bug just observed in the
-    # log). Ending successfully removes that competing navigation, so the redirect
-    # deterministically wins. 'replace' drops the transient prompt from history so
-    # Back from results goes to the menu, not back into the keyboard. cacheToDisc
-    # is off so the empty prompt listing is never cached in place of results.
-    results_url = build_url({'action': 'search_results', 'q': q.strip()})
-    xbmc.executebuiltin('Container.Update(%s,replace)' % results_url)
-    xbmcplugin.endOfDirectory(HANDLE, succeeded=True, cacheToDisc=False)
+    save_last_search_query(q.strip())
+    xbmc.executebuiltin('Container.Update(%s)' % build_url({'action': 'search_results'}))
 
 
-def list_search_results(q: str):
+def list_search_results():
+    """Dialog-free results view - always re-reads the persisted query.
+
+    This is the key property that makes it safe to return to after playback:
+    when Kodi silently reloads the current container after Stop/Exit, it
+    re-invokes this exact URL. Because rendering here never opens a dialog,
+    that reload just re-lists the same results instead of re-prompting (and,
+    in the previous inline version, falling through to Files when the
+    re-prompt path failed).
+    """
+    q = load_last_search_query()
+    xbmcplugin.setPluginCategory(HANDLE, ('Search: %s' % q) if q else 'Search')
+
+    li = xbmcgui.ListItem('New search...')
+    li.setProperty('IsPlayable', 'false')
+    xbmcplugin.addDirectoryItem(HANDLE, build_url({'action': 'search'}), li, False)
+    _add_spacer()
+
+    if not q:
+        xbmcplugin.endOfDirectory(HANDLE)
+        return
+
     idx = load_playlist_index(force=False)
     epg = load_epg_now_next(force=False, playlist_index=idx)
     channels = idx.get('channels', [])
 
-    xbmcplugin.setPluginCategory(HANDLE, 'Search: %s' % q)
     max_results = get_setting_int('max_search_results', 200)
-    ql = (q or '').lower().strip()
+    ql = q.lower()
     hits = 0
 
     for i, ch in enumerate(channels):
@@ -759,10 +795,9 @@ def list_search_results(q: str):
                 break
 
     if hits == 0:
-        li = xbmcgui.ListItem('No matches for "%s" - search again' % q)
+        li = xbmcgui.ListItem('No matches for "%s"' % q)
         li.setProperty('IsPlayable', 'false')
-        li.setArt({'icon': os.path.join(MEDIA_PATH, 'search.png'), 'thumb': os.path.join(MEDIA_PATH, 'search.png')})
-        xbmcplugin.addDirectoryItem(HANDLE, build_url({'action': 'search'}), li, True)
+        xbmcplugin.addDirectoryItem(HANDLE, '', li, False)
 
     xbmcplugin.endOfDirectory(HANDLE)
 
@@ -945,7 +980,7 @@ def router(paramstring: str):
     elif action == 'search':
         do_search()
     elif action == 'search_results':
-        list_search_results(params.get('q', ''))
+        list_search_results()
     elif action == 'play':
         play_channel_by_index(params.get('i',''))
     elif action == 'play_url':
