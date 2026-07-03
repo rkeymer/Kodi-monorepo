@@ -701,18 +701,21 @@ def list_coming_up():
     schedules = extract_schedule_from_file(epg_path, wanted, now, end_epoch, max_per_channel=50)
 
     for ch in pinned:
-        header = xbmcgui.ListItem(f"[B]{ch['name']}[/B]")
-        header.setProperty('IsPlayable', 'false')
-        if ch['logo']:
-            header.setArt({'thumb': ch['logo'], 'icon': ch['logo']})
-        else:
-            header.setArt({'icon': 'DefaultFolder.png', 'thumb': ''})
-        xbmcplugin.addDirectoryItem(HANDLE, '', header, False)
-
         if ch['i'] is not None:
             play_url = build_url({'action':'play','i':str(ch['i'])})
         else:
             play_url = build_url({'action':'play_url','u':ch['url'],'n':ch['name']})
+
+        # Channel-name header is itself playable (plays live, same as selecting
+        # the channel from On Now/Recent/Favourites) - not just a label over
+        # the programme rows below it.
+        header = xbmcgui.ListItem(f"[B]{ch['name']}[/B]")
+        header.setProperty('IsPlayable', 'true')
+        if ch['logo']:
+            header.setArt({'thumb': ch['logo'], 'icon': ch['logo']})
+        else:
+            header.setArt({'icon': 'DefaultFolder.png', 'thumb': ''})
+        xbmcplugin.addDirectoryItem(HANDLE, play_url, header, False)
 
         progs = schedules.get(ch['tvg_id'], [])
         if not progs:
