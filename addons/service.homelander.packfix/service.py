@@ -163,10 +163,11 @@ def sweep():
     def log(msg):
         xbmc.log('[service.homelander.packfix] %s' % msg, xbmc.LOGINFO)
 
+    summary = []
     for path, fn, label in _targets():
         status = apply_patch(path, fn, log)
-        if status not in ('patched', 'already-patched'):
-            log('%s -> %s' % (label, status))
+        summary.append('%s=%s' % (label, status))
+    log('sweep: ' + '  '.join(summary))
 
 
 def run():
