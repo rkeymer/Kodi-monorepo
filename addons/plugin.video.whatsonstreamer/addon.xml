@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon
+    id="plugin.video.whatsonstreamer"
+    name="WhatsOnStreamer"
+    version="0.1.0"
+    provider-name="Personal">
+
+    <requires>
+        <import addon="xbmc.python" version="3.0.0"/>
+        <import addon="service.homelander.packfix" version="1.0.0"/>
+    </requires>
+
+    <extension
+        point="xbmc.python.pluginsource"
+        library="main.py">
+        <provides>video</provides>
+    </extension>
+
+    <extension point="xbmc.addon.metadata">
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
+        <summary>See what’s up next from your SIMKL Watching list, with IPTV VOD/series playback</summary>
+        <description>
+WhatsOnStreamer shows:
+- New aired episodes you haven’t watched yet
+- Upcoming episodes (with air dates when TMDB is enabled)
+- Play via local file, AllDebrid, Homelander, or an IPTV VOD/series provider
+        </description>
+        <platform>all</platform>
+    </extension>
+
+</addon>

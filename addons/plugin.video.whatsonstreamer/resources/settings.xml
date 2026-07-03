@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<settings>
+  <category label="SIMKL">
+    <setting id="client_id"
+             type="text"
+             label="SIMKL Client ID (API Key)"
+             default=""/>
+    <setting id="show_posters"
+             type="bool"
+             label="Show posters (SIMKL images)"
+             default="true"/>
+    <setting id="access_token"
+             type="text"
+             label="SIMKL Access Token (auto)"
+             default=""
+             enable="false"/>
+    <setting id="debug_logging"
+             type="bool"
+             label="Debug logging (log raw SIMKL responses)"
+             default="false"/>
+  </category>
+
+  <category label="AllDebrid">
+    <setting id="alldebrid_api_key"
+             type="text"
+             label="AllDebrid API Key"
+             default=""/>
+  </category>
+
+  <category label="Local Media">
+    <setting id="local_media_path"
+             type="text"
+             label="Series base folder (e.g. C:\media\series)"
+             default=""/>
+  </category>
+
+  <category label="TMDB">
+    <setting id="tmdb_api_key"
+             type="text"
+             label="TMDB API Key (v3)"
+             default=""/>
+    <setting id="airdate_source"
+             type="enum"
+             label="Episode airdate source"
+             values="SIMKL|TMDB"
+             default="1"/>
+  </category>
+
+  <category label="IPTV">
+    <setting id="iptv_base_url"
+             type="text"
+             label="IPTV provider base URL (no path)"
+             default=""/>
+    <setting id="iptv_username"
+             type="text"
+             label="IPTV username"
+             default=""/>
+    <setting id="iptv_password"
+             type="text"
+             label="IPTV password"
+             default=""
+             option="hidden"/>
+    <setting id="iptv_vod_enabled"
+             type="bool"
+             label="Enable IPTV movie (VOD) lookup"
+             default="true"/>
+    <setting id="iptv_series_enabled"
+             type="bool"
+             label="Enable IPTV series lookup"
+             default="true"/>
+    <setting id="iptv_catalog_ttl_hours"
+             type="number"
+             label="IPTV catalog cache TTL (hours)"
+             default="24"/>
+  </category>
+</settings>
