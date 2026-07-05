@@ -12,7 +12,7 @@ from resources.lib.filters import build_filter
 from resources.lib.cache import is_fresh, load_json, save_json, ensure_dir
 from resources.lib.playlist import build_m3u_url, build_epg_url
 from resources.lib.playlist_fetch import fetch_url, parse_and_index
-from resources.lib.http import download_to_file
+from resources.lib.http import download_to_file, UA
 from resources.lib.xmltv import extract_now_next_from_file, extract_schedule_from_file
 from resources.lib import log
 
@@ -830,7 +830,7 @@ def play_channel_by_index(i: str):
 
     update_recent_from_entry(channel_to_entry(ch))
 
-    li = xbmcgui.ListItem(path=url)
+    li = xbmcgui.ListItem(path=f"{url}|User-Agent={urllib.parse.quote(UA)}")
     li.setProperty('IsPlayable', 'true')
     xbmcplugin.setResolvedUrl(HANDLE, True, li)
 
@@ -842,7 +842,7 @@ def play_channel_by_url(url: str, name: str = ''):
 
     update_recent_from_entry({'name': name or url, 'url': url, 'tvg_id': '', 'logo': '', 'group': ''})
 
-    li = xbmcgui.ListItem(path=url)
+    li = xbmcgui.ListItem(path=f"{url}|User-Agent={urllib.parse.quote(UA)}")
     li.setProperty('IsPlayable', 'true')
     xbmcplugin.setResolvedUrl(HANDLE, True, li)
 
