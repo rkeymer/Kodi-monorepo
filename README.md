@@ -11,6 +11,7 @@ Kodi repository on GitHub Pages.
 |----|------|---------|
 | `plugin.video.whatsonnow` | WhatsOnNow | Live-TV / IPTV browser for Xtream-codes style providers |
 | `plugin.video.simkl.watching` | WhatsUpNext | Shows your SIMKL *Watching* list and plays via Homelander / AllDebrid / local files |
+| `service.homelander.packfix` | Homelander Pack Fix | Background service, installed as a WhatsUpNext dependency, that self-heals a Homelander/resolveurl season-pack episode-resolution bug |
 | `repository.keymer` | Keymer Kodi Repo | The repository add-on that points Kodi at the hosted `addons.xml` |
 
 ### WhatsOnNow
@@ -30,6 +31,17 @@ or a local folder are badged and playable in place.
   [Homelander](https://kodi.tv/) for playback.
 - **Optional:** TMDB v3 API key (air dates, posters, search), AllDebrid API
   key, local media folder.
+
+### Homelander Pack Fix
+A service (not user-facing) that repairs a bug in the third-party Homelander
+add-on: multi-file magnet torrents (season packs) resolve to whatever file the
+debrid resolver's `max(sources)` picks — usually the largest file, e.g. always
+the pilot — instead of the requested episode. Patches Homelander's resolver to
+route through its own (unused) pack-aware `debrid.resolver(..., from_pack=...)`
+machinery, and patches resolveurl's AllDebrid plugin to prefer a `dn=`
+filename match over largest-file. Runs on startup, checks hourly, no-ops if
+Homelander/resolveurl aren't installed, and self-heals if an update to either
+add-on reverts the patch. Installed automatically as a WhatsUpNext dependency.
 
 ## Building
 
