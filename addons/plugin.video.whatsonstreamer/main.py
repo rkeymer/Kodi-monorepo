@@ -11,7 +11,8 @@ from resources.lib.tmdb_api import TmdbApi
 from resources.lib.alldebrid_api import AllDebridApi
 from resources.lib.local_media import LocalMediaApi
 from resources.lib.iptv_api import IptvApi
-
+from resources.lib.ui import get_params, build_url, add_folder, add_item, end_dir
+from resources.lib import livetv
 
 
 ADDON = xbmcaddon.Addon()
@@ -26,64 +27,6 @@ HANDLE = int(sys.argv[1])
 # --------------------------
 def log(msg):
     xbmc.log(f"[WhatsOnStreamer] {msg}", xbmc.LOGINFO)
-
-
-def get_params():
-    """
-    sys.argv[2] contains the querystring portion passed by Kodi, e.g.
-    '?action=new'
-    """
-    if len(sys.argv) < 3 or not sys.argv[2]:
-        return {}
-    return dict(urllib.parse.parse_qsl(sys.argv[2].lstrip('?')))
-
-
-def build_url(**kwargs):
-    """
-    Builds a plugin URL like:
-    plugin://plugin.video.whatsonstreamer/?action=new
-    """
-    return sys.argv[0] + "?" + urllib.parse.urlencode(kwargs)
-
-
-def add_folder(label, action, icon=None):
-    li = xbmcgui.ListItem(label=label)
-    if icon:
-        li.setArt({"icon": icon, "thumb": icon})
-    url = build_url(action=action)
-    xbmcplugin.addDirectoryItem(
-        handle=HANDLE,
-        url=url,
-        listitem=li,
-        isFolder=True
-    )
-
-
-def add_item(label, url="", info=None, art=None, is_folder=False, context_menu=None, label2="", cast=None, is_playable=False):
-    li = xbmcgui.ListItem(label=label, label2=label2)
-    if is_playable:
-        li.setProperty("IsPlayable", "true")
-    if info:
-        li.setInfo("video", info)
-    if art:
-        li.setArt(art)
-    if cast:
-        try:
-            li.setCast(cast)
-        except Exception:
-            pass
-    if context_menu:
-        li.addContextMenuItems(context_menu)
-    xbmcplugin.addDirectoryItem(
-        handle=HANDLE,
-        url=url,
-        listitem=li,
-        isFolder=is_folder
-    )
-
-
-def end_dir():
-    xbmcplugin.endOfDirectory(HANDLE)
 
 
 def parse_sxxexx(s):
@@ -306,7 +249,15 @@ def tmdb_next_episode_airdate(addon, tmdb_id):
 # --------------------------
 # Screens
 # --------------------------
-def show_main_menu():
+def show_root_menu():
+    xbmcplugin.setPluginCategory(HANDLE, "WhatsOnStreamer")
+    add_folder("WhatsOnNow (Live TV)", "livetv_root", icon=f"{MEDIA_PATH}/on_now.png")
+    add_folder("WhatsUpNext (SIMKL)", "whatsupnext_root", icon=f"{MEDIA_PATH}/new.png")
+    add_folder("Tools", "tools_root", icon=f"{MEDIA_PATH}/tools_diagnostics.png")
+    end_dir()
+
+
+def show_whatsupnext_menu():
     xbmcplugin.setPluginCategory(HANDLE, "WhatsUpNext")
     add_folder("New Episodes", "new", icon=f"{MEDIA_PATH}/new.png")
     add_folder("Upcoming Episodes", "upcoming", icon=f"{MEDIA_PATH}/upcoming.png")
@@ -314,6 +265,17 @@ def show_main_menu():
     add_folder("AllDebrid", "alldebrid_menu", icon=f"{MEDIA_PATH}/alldebrid.png")
     add_folder("Search", "search_menu", icon=f"{MEDIA_PATH}/search.png")
     add_folder("Settings / Help", "help", icon=f"{MEDIA_PATH}/help.png")
+    end_dir()
+
+
+def show_tools_menu():
+    xbmcplugin.setPluginCategory(HANDLE, "Tools")
+    add_folder("Authorize SIMKL", "auth", icon=f"{MEDIA_PATH}/auth.png")
+    add_item("Live TV: Build info", url=build_url(action="livetv_build_info"))
+    add_item("Live TV: Run auto-update now", url=build_url(action="svc_update"))
+    add_item("Live TV: Test connection", url=build_url(action="livetv_test"))
+    add_item("Live TV: Test local files", url=build_url(action="livetv_test_local"))
+    add_item("Open Settings", url=build_url(action="settings"))
     end_dir()
 
 
@@ -825,7 +787,7 @@ def search_movies():
 
 def show_help():
     xbmcplugin.setPluginCategory(HANDLE, "Settings / Help")
-    add_folder("Authorize SIMKL", "auth", icon=f"{MEDIA_PATH}/auth.png")
+    add_item("SIMKL authorization moved to the root Tools menu.")
     add_item("Tip: Add TMDB API key in Settings to show episode air dates / countdown.")
     add_item("Debug: Enable 'Debug logging' to log raw SIMKL/TMDB responses.")
     end_dir()
@@ -849,7 +811,7 @@ def show_auth():
     except Exception as e:
         xbmc.log(f"[WhatsOnStreamer] PIN request failed: {e}", xbmc.LOGERROR)
         xbmcgui.Dialog().notification("SIMKL", "PIN request failed", xbmcgui.NOTIFICATION_ERROR)
-        show_main_menu()
+        show_whatsupnext_menu()
         return
 
     user_code = pin.get("user_code")
@@ -859,7 +821,7 @@ def show_auth():
 
     if not user_code:
         xbmcgui.Dialog().notification("SIMKL", "PIN response missing user_code", xbmcgui.NOTIFICATION_ERROR)
-        show_main_menu()
+        show_whatsupnext_menu()
         return
 
     xbmcgui.Dialog().ok(
@@ -893,7 +855,7 @@ def show_auth():
     else:
         xbmcgui.Dialog().notification("SIMKL", "Authorization timed out", xbmcgui.NOTIFICATION_ERROR)
 
-    show_main_menu()
+    show_whatsupnext_menu()
 
 
 # --------------------------
@@ -1202,11 +1164,16 @@ def show_season_episodes(params):
             next=code, ep_title=ep_title, air_date=air_date
         )
 
-        # Default click: local file when available, otherwise Homelander
+        # Default click priority: local file -> IPTV -> Homelander (catch-all).
+        # AllDebrid stays "Play via AllDebrid"-only: once Homelander is handed off
+        # it can't report failure back to us, so nothing can fall through past it.
         local_path = lf_available.get(ep_num)
         if local_path:
             default_url = local_path
             is_playable = True
+        elif ep_num in iptv_available:
+            default_url = build_url(action="play_iptv", title=title, season=season, episode=ep_num)
+            is_playable = False
         else:
             default_url = hl_url
             is_playable = False
@@ -1572,7 +1539,63 @@ def router():
     log(f"Action: {action}")
 
     if action == "root":
-        show_main_menu()
+        show_root_menu()
+    elif action == "whatsupnext_root":
+        show_whatsupnext_menu()
+    elif action == "tools_root":
+        show_tools_menu()
+    elif action == "settings":
+        ADDON.openSettings()
+    elif action == "svc_update":
+        xbmc.executebuiltin('RunScript(special://home/addons/plugin.video.whatsonstreamer/service.py,manual)')
+    elif action == "livetv_root":
+        livetv.list_root()
+    elif action == "livetv_build_info":
+        livetv.show_build_info()
+    elif action == "livetv_test":
+        livetv.test_connection()
+    elif action == "livetv_test_local":
+        livetv.test_local_files()
+    elif action == "livetv_on_now":
+        livetv.list_on_now()
+    elif action == "livetv_coming_up":
+        livetv.list_coming_up()
+    elif action == "livetv_favs":
+        livetv.list_favourites()
+    elif action == "livetv_recent":
+        livetv.list_recent()
+    elif action == "livetv_recent_clear":
+        livetv.clear_recent(); xbmc.executebuiltin('Container.Refresh')
+    elif action == "livetv_fav_clear":
+        livetv.clear_favourites(); xbmc.executebuiltin('Container.Refresh')
+    elif action == "livetv_fav_add":
+        livetv.fav_add_index(params.get('i', '')); xbmc.executebuiltin('Container.Refresh')
+    elif action == "livetv_fav_add_url":
+        livetv.fav_add_url(params.get('u', ''), params.get('n', '')); xbmc.executebuiltin('Container.Refresh')
+    elif action == "livetv_fav_remove_url":
+        livetv.fav_remove_url(params.get('u', '')); xbmc.executebuiltin('Container.Refresh')
+    elif action == "livetv_groups":
+        livetv.list_groups()
+    elif action == "livetv_group":
+        livetv.list_group(params.get('name', ''), int(params.get('start', '0') or '0'))
+    elif action == "livetv_all":
+        livetv.list_all_channels(int(params.get('start', '0') or '0'))
+    elif action == "livetv_search":
+        livetv.do_search()
+    elif action == "livetv_search_results":
+        livetv.list_search_results()
+    elif action == "livetv_play":
+        livetv.play_channel_by_index(params.get('i', ''))
+    elif action == "livetv_play_url":
+        livetv.play_channel_by_url(params.get('u', ''), params.get('n', ''))
+    elif action == "livetv_play_m3u":
+        livetv.play_m3u(params.get('u', ''), params.get('n', ''))
+    elif action == "livetv_refresh":
+        livetv.load_playlist_index(force=True); xbmc.executebuiltin('Container.Refresh')
+    elif action == "livetv_refresh_epg":
+        _idx = livetv.load_playlist_index(force=False)
+        livetv.load_epg_now_next(force=True, playlist_index=_idx)
+        xbmc.executebuiltin('Container.Refresh')
     elif action == "new":
         show_new_episodes()
     elif action == "upcoming":
@@ -1621,7 +1644,7 @@ def router():
             f"Unknown action: {action}",
             xbmcgui.NOTIFICATION_ERROR
         )
-        show_main_menu()
+        show_root_menu()
 
 
 if __name__ == "__main__":

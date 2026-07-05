@@ -2,7 +2,7 @@
 <addon
     id="plugin.video.whatsonstreamer"
     name="WhatsOnStreamer"
-    version="0.1.0"
+    version="0.2.1"
     provider-name="Personal">
 
     <requires>
@@ -16,16 +16,18 @@
         <provides>video</provides>
     </extension>
 
+    <extension point="xbmc.service" library="service.py" start="startup" />
+
     <extension point="xbmc.addon.metadata">
         <assets>
             <icon>icon.png</icon>
         </assets>
-        <summary>See what’s up next from your SIMKL Watching list, with IPTV VOD/series playback</summary>
+        <summary>WhatsOnNow live TV browsing and WhatsUpNext SIMKL watching list, in one add-on</summary>
         <description>
 WhatsOnStreamer shows:
-- New aired episodes you haven’t watched yet
-- Upcoming episodes (with air dates when TMDB is enabled)
-- Play via local file, AllDebrid, Homelander, or an IPTV VOD/series provider
+- WhatsOnNow: Live TV (On Now, Coming Up, Favourites, Groups, All Channels, EPG)
+- WhatsUpNext: New aired episodes, Upcoming episodes, Movies from your SIMKL Watching list
+- Play via local file, AllDebrid, Homelander, or an IPTV VOD/series/live provider
         </description>
         <platform>all</platform>
     </extension>
