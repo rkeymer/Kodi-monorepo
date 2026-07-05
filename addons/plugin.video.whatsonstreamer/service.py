@@ -14,8 +14,15 @@ ADDON = xbmcaddon.Addon(ADDON_ID)
 # All internal imports are package-qualified (resources.lib.X), so this only
 # ever adds the addon root — never resources/lib itself, which would shadow
 # stdlib modules like `http`.
+#
+# Deriving this from __file__ rather than ADDON.getAddonInfo('path') matters:
+# when Kodi invokes this script via RunScript(special://.../service.py,manual)
+# it logs "Script invoked without an addon", and getAddonInfo('path') comes
+# back empty in that context — silently, since this was wrapped in a bare
+# try/except — leaving resources.lib.* unimportable and every auto-update
+# attempt crashing with ModuleNotFoundError.
 try:
-    _addon_path = xbmcvfs.translatePath(ADDON.getAddonInfo('path'))
+    _addon_path = os.path.dirname(os.path.abspath(__file__))
     if _addon_path and _addon_path not in sys.path:
         sys.path.insert(0, _addon_path)
 except Exception:

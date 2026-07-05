@@ -103,12 +103,15 @@
     <setting id="livetv_exclude_regex" type="text" label="Exclude regex (optional)" default="" />
   </category>
 
-  <category label="Live TV - Performance">
-    <setting id="livetv_auto_update_enabled" type="bool" label="Auto-update local files" default="false" />
-    <setting id="livetv_auto_update_mode" type="enum" label="Auto-update schedule" values="Once per day at time|Every X hours" default="1" />
+  <category label="Live TV - Auto-Update">
+    <setting id="livetv_auto_update_enabled" type="bool" label="Enable automatic playlist/EPG updates" default="false" />
+    <setting id="livetv_auto_update_mode" type="enum" label="Update schedule" values="Once per day at time|Every X hours" default="1" />
     <setting id="livetv_auto_update_time" type="text" label="Daily update time (HH:MM, 24h)" default="02:00" visible="eq(-1,0)" />
     <setting id="livetv_auto_update_interval_hours" type="number" label="Update interval (hours)" default="6" visible="eq(-2,1)" />
     <setting id="livetv_auto_update_notify" type="bool" label="Notify during auto-update" default="true" />
+  </category>
+
+  <category label="Live TV - Performance">
     <setting id="livetv_cache_ttl" type="number" label="Playlist cache TTL (minutes)" default="10" />
     <setting id="livetv_page_size" type="number" label="Page size (items per page)" default="200" />
     <setting id="livetv_max_search_results" type="number" label="Max search results" default="200" />
