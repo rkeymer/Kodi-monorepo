@@ -11,8 +11,11 @@ from resources.lib.tmdb_api import TmdbApi
 from resources.lib.alldebrid_api import AllDebridApi
 from resources.lib.local_media import LocalMediaApi
 from resources.lib.iptv_api import IptvApi
+from resources.lib.iptv_http import UA as IPTV_UA
 from resources.lib.ui import get_params, build_url, add_folder, add_item, end_dir
 from resources.lib import livetv
+from resources.lib import settings_reset
+from resources.lib import legacy_import
 
 
 ADDON = xbmcaddon.Addon()
@@ -275,6 +278,8 @@ def show_tools_menu():
     add_item("Live TV: Run auto-update now", url=build_url(action="svc_update"))
     add_item("Live TV: Test connection", url=build_url(action="livetv_test"))
     add_item("Live TV: Test local files", url=build_url(action="livetv_test_local"))
+    add_item("Import settings from WhatsOnNow / WhatsUpNext", url=build_url(action="settings_import"))
+    add_item("Reset settings to defaults", url=build_url(action="settings_reset"))
     add_item("Open Settings", url=build_url(action="settings"))
     end_dir()
 
@@ -1358,11 +1363,18 @@ _AD_MIME = {
 }
 
 
-def _ad_resolve_and_play(stream_url, title, use_resolved_url=False):
-    """Shared playback helper for AllDebrid streams."""
+def _ad_resolve_and_play(stream_url, title, use_resolved_url=False, user_agent=None):
+    """Shared playback helper for AllDebrid streams and direct IPTV streams.
+
+    user_agent is only passed for direct IPTV provider URLs — those servers can
+    silently reject Kodi's default player UA (empty body, instant EOF from the
+    demuxer). AllDebrid's already-resolved CDN links don't need it and shouldn't
+    get an unrelated header appended.
+    """
     ext = ("." + title.rsplit(".", 1)[-1].lower()) if "." in title else ""
     mime = _AD_MIME.get(ext, "")
-    li = xbmcgui.ListItem(label=title, path=stream_url)
+    play_path = f"{stream_url}|User-Agent={urllib.parse.quote(user_agent)}" if user_agent else stream_url
+    li = xbmcgui.ListItem(label=title, path=play_path)
     li.setInfo("video", {"title": title})
     li.setContentLookup(False)
     if mime:
@@ -1370,7 +1382,7 @@ def _ad_resolve_and_play(stream_url, title, use_resolved_url=False):
     if use_resolved_url:
         xbmcplugin.setResolvedUrl(HANDLE, True, li)
     else:
-        xbmc.Player().play(stream_url, li)
+        xbmc.Player().play(play_path, li)
 
 
 def play_alldebrid_link(params):
@@ -1462,7 +1474,7 @@ def play_iptv(params):
         return
 
     label = display or f"{title} S{season:02d}E{episode:02d}"
-    _ad_resolve_and_play(stream_url, label)
+    _ad_resolve_and_play(stream_url, label, user_agent=IPTV_UA)
 
 
 # --------------------------
@@ -1546,6 +1558,10 @@ def router():
         show_tools_menu()
     elif action == "settings":
         ADDON.openSettings()
+    elif action == "settings_import":
+        legacy_import.run()
+    elif action == "settings_reset":
+        settings_reset.confirm_and_reset()
     elif action == "svc_update":
         xbmc.executebuiltin('RunScript(special://home/addons/plugin.video.whatsonstreamer/service.py,manual)')
     elif action == "livetv_root":

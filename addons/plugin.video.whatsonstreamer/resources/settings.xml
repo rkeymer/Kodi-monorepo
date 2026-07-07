@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <settings>
   <category label="SIMKL">
-    <setting id="client_id"
-             type="text"
-             label="SIMKL Client ID (API Key)"
-             default=""/>
     <setting id="show_posters"
              type="bool"
              label="Show posters (SIMKL images)"
              default="true"/>
+    <setting id="client_id"
+             type="text"
+             label="SIMKL Client ID (API Key)"
+             default=""/>
     <setting id="access_token"
              type="text"
              label="SIMKL Access Token (auto)"
@@ -104,7 +104,7 @@
   </category>
 
   <category label="Live TV - Auto-Update">
-    <setting id="livetv_auto_update_enabled" type="bool" label="Enable automatic playlist/EPG updates" default="false" />
+    <setting id="livetv_auto_update_enabled" type="bool" label="Enable automatic playlist/EPG updates" default="true" />
     <setting id="livetv_auto_update_mode" type="enum" label="Update schedule" values="Once per day at time|Every X hours" default="1" />
     <setting id="livetv_auto_update_time" type="text" label="Daily update time (HH:MM, 24h)" default="02:00" visible="eq(-1,0)" />
     <setting id="livetv_auto_update_interval_hours" type="number" label="Update interval (hours)" default="6" visible="eq(-2,1)" />
