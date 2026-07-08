@@ -16,7 +16,7 @@ except ImportError:
 
 import xbmcvfs
 
-UA = 'WhatsOnStreamer/1.0 (Kodi)'
+UA = 'VLC/3.0.20 LibVLC/3.0.20'
 
 DEFAULT_BACKOFF_SECONDS = 2
 
