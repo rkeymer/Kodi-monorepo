@@ -426,6 +426,26 @@ def _add_pager(start: int, page_size: int, total: int, base_query: dict):
         xbmcplugin.addDirectoryItem(HANDLE, build_url(**{**base_query, 'start': str(next_start)}), xbmcgui.ListItem(f"Next ({next_start+1}-{min(next_start+page_size, total)}) >>"), True)
 
 
+def _favourites_context_items(url: str, index_i: int = None, name: str = ''):
+    """WhatsOnStreamer's own per-channel favourite toggle, for any row that
+    represents a channel (channel list rows, Coming Up's channel headers).
+
+    Labeled "WhatsOnStreamer:" to distinguish from Kodi's own native
+    "Add to favourites" item, which every plugin container gets for free
+    and which Kodi has not allowed addons to suppress since Krypton (v17) -
+    replaceItems no longer hides core items like it once did. That native
+    entry writes to Kodi's own favourites.xml; this one writes to our own
+    favourites.json (the addon's own Favourites folder). Same-looking
+    label without the prefix reads as a bug (a literal duplicate) rather
+    than two distinct favourites systems.
+    """
+    if is_favourite(url):
+        return [('WhatsOnStreamer: Remove from favourites', f"RunPlugin({build_url(action='livetv_fav_remove_url', u=url)})")]
+    if index_i is not None:
+        return [('WhatsOnStreamer: Add to favourites', f"RunPlugin({build_url(action='livetv_fav_add', i=str(index_i))})")]
+    return [('WhatsOnStreamer: Add to favourites', f"RunPlugin({build_url(action='livetv_fav_add_url', u=url, n=name)})")]
+
+
 def _add_channel_item(ch: dict, index_i: int = None, epg_map: dict = None, url_override: str = None):
     name = ch.get('name') or 'Channel'
     url = url_override or ch.get('url') or ''
@@ -447,14 +467,7 @@ def _add_channel_item(ch: dict, index_i: int = None, epg_map: dict = None, url_o
     if logo:
         art = {'thumb': logo, 'icon': logo}
 
-    cm = []
-    if is_favourite(url):
-        cm.append(('Remove from favourites', f"RunPlugin({build_url(action='livetv_fav_remove_url', u=url)})"))
-    else:
-        if index_i is not None:
-            cm.append(('Add to favourites', f"RunPlugin({build_url(action='livetv_fav_add', i=str(index_i))})"))
-        else:
-            cm.append(('Add to favourites', f"RunPlugin({build_url(action='livetv_fav_add_url', u=url, n=name)})"))
+    cm = _favourites_context_items(url, index_i, name)
 
     if index_i is not None:
         play_url = build_url(action='livetv_play', i=str(index_i))
@@ -700,6 +713,7 @@ def list_coming_up():
             header.setArt({'thumb': ch['logo'], 'icon': ch['logo']})
         else:
             header.setArt({'icon': 'DefaultFolder.png', 'thumb': ''})
+        header.addContextMenuItems(_favourites_context_items(ch['url'], ch['i'], ch['name']), replaceItems=True)
         xbmcplugin.addDirectoryItem(HANDLE, play_url, header, False)
 
         progs = schedules.get(ch['tvg_id'], [])
