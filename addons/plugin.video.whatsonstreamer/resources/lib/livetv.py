@@ -811,7 +811,16 @@ def play_channel_by_index(i: str):
 
     update_recent_from_entry(channel_to_entry(ch))
 
-    li = xbmcgui.ListItem(path=f"{url}|User-Agent={urllib.parse.quote(UA)}")
+    name = ch.get('name') or 'Live TV'
+    li = xbmcgui.ListItem(label=name, path=f"{url}|User-Agent={urllib.parse.quote(UA)}")
+    # The browse label for this channel may be swapped to "Channel - EPG programme
+    # title" (see _add_channel_item) so you can see what's on while scanning the
+    # list. Without an explicit label/title here, Kodi's playing-item info falls
+    # back to that browse label, and third-party scrobblers watching Kodi over
+    # JSON-RPC (e.g. SIMKL's own Kodi auto-scrobbler) fuzzy-match the programme
+    # title against their catalog and wrongly check in a movie of the same name.
+    # Keeping the resolved item's title as the plain channel name avoids that.
+    li.setInfo('video', {'title': name, 'mediatype': 'video'})
     li.setProperty('IsPlayable', 'true')
     xbmcplugin.setResolvedUrl(HANDLE, True, li)
 
@@ -821,9 +830,13 @@ def play_channel_by_url(url: str, name: str = ''):
     if not url:
         _resolve_fail(); return
 
-    update_recent_from_entry({'name': name or url, 'url': url, 'tvg_id': '', 'logo': '', 'group': ''})
+    name = name or 'Live TV'
+    update_recent_from_entry({'name': name, 'url': url, 'tvg_id': '', 'logo': '', 'group': ''})
 
-    li = xbmcgui.ListItem(path=f"{url}|User-Agent={urllib.parse.quote(UA)}")
+    li = xbmcgui.ListItem(label=name, path=f"{url}|User-Agent={urllib.parse.quote(UA)}")
+    # See play_channel_by_index — explicit title prevents an EPG-derived programme
+    # title from leaking into external scrobblers via Kodi's playing-item info.
+    li.setInfo('video', {'title': name, 'mediatype': 'video'})
     li.setProperty('IsPlayable', 'true')
     xbmcplugin.setResolvedUrl(HANDLE, True, li)
 
