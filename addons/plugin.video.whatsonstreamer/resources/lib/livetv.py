@@ -15,9 +15,10 @@ from resources.lib.filters import build_filter
 from resources.lib.livetv_cache import is_fresh, load_json, save_json, ensure_dir
 from resources.lib.playlist import build_m3u_url, build_epg_url
 from resources.lib.playlist_fetch import fetch_url, parse_and_index
-from resources.lib.iptv_http import download_to_file, UA
-from resources.lib.xmltv import extract_now_next_from_file, extract_schedule_from_file
+from resources.lib.iptv_http import download_to_file, check_stream_ok, UA
+from resources.lib.xmltv import extract_now_next_from_file, extract_schedule_from_file, search_programmes_from_file
 from resources.lib.livetv_migrate import migrate_from_whatsonnow_if_needed
+from resources.lib import scheduler
 
 ADDON = xbmcaddon.Addon()
 ADDON_PATH = ADDON.getAddonInfo('path')
@@ -34,6 +35,7 @@ FAVS_PATH = os.path.join(ADDON_DATA_DIR, 'favourites.json')
 RECENT_PATH = os.path.join(ADDON_DATA_DIR, 'recent.json')
 STATE_PATH = os.path.join(ADDON_DATA_DIR, 'update_state.json')
 SEARCH_STATE_PATH = os.path.join(ADDON_DATA_DIR, 'last_search.json')
+SEARCH_EPG_STATE_PATH = os.path.join(ADDON_DATA_DIR, 'last_search_epg.json')
 
 _INDENT = ' ' * 6  # non-breaking spaces — Kodi strips regular leading spaces
 
@@ -153,6 +155,14 @@ def load_last_search_query() -> str:
 
 def save_last_search_query(q: str):
     _save_list(SEARCH_STATE_PATH, {'q': q})
+
+
+def load_last_search_epg_query() -> str:
+    return (_load_list(SEARCH_EPG_STATE_PATH, {}) or {}).get('q', '')
+
+
+def save_last_search_epg_query(q: str):
+    _save_list(SEARCH_EPG_STATE_PATH, {'q': q})
 
 
 def clear_favourites():
@@ -446,6 +456,16 @@ def _favourites_context_items(url: str, index_i: int = None, name: str = ''):
     return [('WhatsOnStreamer: Add to favourites', f"RunPlugin({build_url(action='livetv_fav_add_url', u=url, n=name)})")]
 
 
+def _schedule_context_items(channel_url: str, channel_name: str, channel_logo: str, title: str, start_epoch: int, stop_epoch: int):
+    """Context menu item for scheduling an automatic channel switch when a future
+    programme starts (see service.py's _check_scheduled_events). Only meaningful
+    for rows representing a future programme, so callers pass the programme's own
+    title/start/stop rather than reusing whatever channel-level context exists."""
+    return [('WhatsOnStreamer: Schedule channel switch', "RunPlugin(%s)" % build_url(
+        action='livetv_schedule_add', u=channel_url, n=channel_name, lg=channel_logo,
+        t=title, start=str(int(start_epoch)), stop=str(int(stop_epoch))))]
+
+
 def _add_channel_item(ch: dict, index_i: int = None, epg_map: dict = None, url_override: str = None):
     name = ch.get('name') or 'Channel'
     url = url_override or ch.get('url') or ''
@@ -477,12 +497,16 @@ def _add_channel_item(ch: dict, index_i: int = None, epg_map: dict = None, url_o
     add_item(display_name, url=play_url, info=info, art=art, is_folder=False, context_menu=cm, is_playable=True, replace_context=True)
 
 
-def _add_programme_item(channel_play_url: str, programme_title: str, start_epoch: int, stop_epoch: int, logo: str = ''):
+def _add_programme_item(channel_play_url: str, programme_title: str, start_epoch: int, stop_epoch: int, logo: str = '',
+                         channel_url: str = '', channel_name: str = ''):
     st = _fmt_hhmm(start_epoch)
     sp = _fmt_hhmm(stop_epoch)
     label = f"{_INDENT}{programme_title}  {st}–{sp}"
     art = {'thumb': logo, 'icon': logo} if logo else None
-    add_item(label, url=channel_play_url, info={'plot': label}, art=art, is_folder=False, is_playable=True)
+    cm = None
+    if channel_url:
+        cm = _schedule_context_items(channel_url, channel_name, logo, programme_title, start_epoch, stop_epoch)
+    add_item(label, url=channel_play_url, info={'plot': label}, art=art, is_folder=False, context_menu=cm, is_playable=True)
 
 
 def _index_by_url(channels):
@@ -531,6 +555,8 @@ def list_root():
         # handling for this action (reproduced live as a silent no-op); a plain
         # script invocation has no pending directory to race against.
         ('Search',                 {'action': 'livetv_search'},    'search.png',            False),
+        ('Search EPG (programmes)', {'action': 'livetv_search_epg'}, 'search.png',           False),
+        ('Scheduled Events',       {'action': 'livetv_scheduled'}, 'coming_up.png',         True),
         ('All Channels (paged)',   {'action': 'livetv_all', 'start': '0'}, 'all_channels.png', True),
     ]
     for label, query, icon_file, is_folder in items:
@@ -726,7 +752,8 @@ def list_coming_up():
 
         for p in progs:
             title = p.get('title') or '(untitled)'
-            _add_programme_item(play_url, title, int(p.get('start', 0)), int(p.get('stop', 0)), logo=ch['logo'])
+            _add_programme_item(play_url, title, int(p.get('start', 0)), int(p.get('stop', 0)), logo=ch['logo'],
+                                 channel_url=ch['url'], channel_name=ch['name'])
 
         _add_spacer()
 
@@ -785,11 +812,178 @@ def list_search_results():
     end_dir()
 
 
+def do_search_epg():
+    """Prompt for a programme title, persist it, then navigate to the results view.
+
+    Same non-folder redirect-race reasoning as do_search (see list_root).
+    """
+    q = xbmcgui.Dialog().input('Search EPG (e.g. a team, match or programme title)', type=xbmcgui.INPUT_ALPHANUM)
+    if not q or not q.strip():
+        return
+
+    save_last_search_epg_query(q.strip())
+    xbmc.executebuiltin('Container.Update(%s)' % build_url(action='livetv_search_epg_results'))
+
+
+def list_search_epg_results():
+    """Dialog-free results view - searches programme titles (not channel names)
+    across every channel's schedule for the configured horizon, so e.g. "Rugby SA
+    vs Scotland" surfaces whichever channel(s) it's airing on later today, not just
+    what's on right now."""
+    q = load_last_search_epg_query()
+    xbmcplugin.setPluginCategory(HANDLE, ('Search EPG: %s' % q) if q else 'Search EPG')
+
+    li = xbmcgui.ListItem('New EPG search...')
+    li.setProperty('IsPlayable', 'false')
+    xbmcplugin.addDirectoryItem(HANDLE, build_url(action='livetv_search_epg'), li, False)
+    _add_spacer()
+
+    if not q:
+        end_dir()
+        return
+
+    epg_path = get_setting('livetv_local_epg_path', '') or 'special://profile/addon_data/plugin.video.whatsonstreamer/epg.xml'
+    if not xbmcvfs.exists(epg_path):
+        xbmcgui.Dialog().ok('WhatsOnStreamer', 'EPG data not available yet. Open "On Now" first to fetch the EPG, then try again.')
+        end_dir()
+        return
+
+    idx = load_playlist_index(force=False)
+    channels = idx.get('channels', [])
+    by_tvgid = {}
+    for i, ch in enumerate(channels):
+        cid = (ch.get('tvg_id') or '').strip()
+        if cid and cid not in by_tvgid:
+            by_tvgid[cid] = (i, ch)
+
+    hours = get_setting_int('livetv_epg_search_hours', 24)
+    now = int(time.time())
+    end_epoch = now + max(1, hours) * 3600
+    max_results = get_setting_int('livetv_max_search_results', 200)
+
+    matches = search_programmes_from_file(epg_path, q, now, end_epoch, max_results=max_results)
+
+    hits = 0
+    for m in matches:
+        entry = by_tvgid.get(m.get('channel'))
+        if not entry:
+            continue
+        i, ch = entry
+        play_url = build_url(action='livetv_play', i=str(i))
+        st = _fmt_hhmm(m.get('start', 0))
+        sp = _fmt_hhmm(m.get('stop', 0))
+        label = f"{ch.get('name') or 'Channel'}: {m.get('title', '')}  {st}–{sp}"
+        logo = ch.get('logo')
+        art = {'thumb': logo, 'icon': logo} if logo else None
+        cm = _schedule_context_items(ch.get('url') or '', ch.get('name') or 'Channel', logo or '',
+                                      m.get('title', ''), int(m.get('start', 0)), int(m.get('stop', 0)))
+        add_item(label, url=play_url, info={'plot': label}, art=art, is_folder=False, context_menu=cm, is_playable=True)
+        hits += 1
+
+    if hits == 0:
+        li = xbmcgui.ListItem('No EPG matches for "%s" in the next %d hours' % (q, hours))
+        li.setProperty('IsPlayable', 'false')
+        xbmcplugin.addDirectoryItem(HANDLE, '', li, False)
+
+    end_dir()
+
+
+# --------------------------
+# Scheduled channel switches
+# --------------------------
+def do_schedule_add(u: str, n: str, lg: str, t: str, start: str, stop: str):
+    try:
+        start_i = int(start)
+        stop_i = int(stop)
+    except (TypeError, ValueError):
+        return
+
+    entry = scheduler.add_scheduled(u, n, lg, t, start_i, stop_i)
+    when = _fmt_hhmm(entry.get('start', start_i))
+    xbmc.executebuiltin('Notification(WhatsOnStreamer,Scheduled: %s on %s at %s,4000,info)' % (
+        entry.get('title', t), entry.get('channel_name', n), when))
+
+
+def do_schedule_remove(event_id: str):
+    scheduler.remove_scheduled(event_id)
+    xbmc.executebuiltin('Container.Refresh')
+
+
+def list_scheduled_events():
+    xbmcplugin.setPluginCategory(HANDLE, 'Scheduled Events')
+
+    now = int(time.time())
+    items = scheduler.prune_expired(now)
+    items = sorted(items, key=lambda it: it.get('start', 0))
+
+    if not items:
+        li = xbmcgui.ListItem('No scheduled events')
+        li.setProperty('IsPlayable', 'false')
+        xbmcplugin.addDirectoryItem(HANDLE, '', li, False)
+        end_dir()
+        return
+
+    for it in items:
+        st = _fmt_hhmm(it.get('start', 0))
+        sp = _fmt_hhmm(it.get('stop', 0))
+        label = f"{it.get('channel_name', 'Channel')}: {it.get('title', '')}  {st}–{sp}"
+        logo = it.get('channel_logo') or ''
+        art = {'thumb': logo, 'icon': logo} if logo else None
+        play_url = build_url(action='livetv_play_url', u=it.get('channel_url', ''), n=it.get('channel_name', ''))
+        cm = [('WhatsOnStreamer: Cancel schedule', "RunPlugin(%s)" % build_url(action='livetv_schedule_remove', id=it.get('id', '')))]
+        add_item(label, url=play_url, info={'plot': label}, art=art, is_folder=False, context_menu=cm, is_playable=True)
+
+    end_dir()
+
+
 # --------------------------
 # Playback
 # --------------------------
 def _resolve_fail():
     xbmcplugin.setResolvedUrl(HANDLE, False, xbmcgui.ListItem())
+
+
+CHECK_TIMEOUT_SECONDS = 4
+RETRY_DELAY_MS = 2000
+
+
+def _resolve_channel_playback(url: str, name: str, plugin_url: str):
+    ok = check_stream_ok(url, timeout=CHECK_TIMEOUT_SECONDS)
+    if not ok:
+        log.warn(f"Stream check failed for {name}, retrying once...")
+        xbmc.sleep(RETRY_DELAY_MS)
+        ok = check_stream_ok(url, timeout=CHECK_TIMEOUT_SECONDS)
+    if not ok:
+        log.warn(f"Stream still failing after retry for {name}")
+        xbmc.executebuiltin(f'Notification(WhatsOnStreamer,{name} may be unavailable right now,4000,warning)')
+    # Resolve regardless of outcome - the check is a heuristic (e.g. a provider
+    # could reject a bare urllib probe but accept the real player's request), so
+    # a failed check must not block playback outright. It only buys the transient
+    # case a moment to recover before Kodi's own attempt.
+
+    # service.py's mid-playback watchdog needs to recognise "a Live TV channel is
+    # playing" and know how to restart it - xbmc.Player().getPlayingFile() reports
+    # whatever Kodi's video player considers the active file, which for resolved
+    # plugin content is the resolved stream path, not this plugin:// URL. Rather
+    # than guess at that format, publish both here as Window(10000) properties
+    # (readable cross-process within this Kodi instance) so the watchdog can match
+    # on either and always restart via the plugin:// URL, keeping this same
+    # check-and-retry logic in the loop rather than hitting the raw stream directly.
+    win = xbmcgui.Window(10000)
+    win.setProperty('WhatsOnStreamer.livetv.plugin_url', plugin_url)
+    win.setProperty('WhatsOnStreamer.livetv.stream_url', url)
+
+    li = xbmcgui.ListItem(label=name, path=f"{url}|User-Agent={urllib.parse.quote(UA)}")
+    # The browse label for this channel may be swapped to "Channel - EPG programme
+    # title" (see _add_channel_item) so you can see what's on while scanning the
+    # list. Without an explicit label/title here, Kodi's playing-item info falls
+    # back to that browse label, and third-party scrobblers watching Kodi over
+    # JSON-RPC (e.g. SIMKL's own Kodi auto-scrobbler) fuzzy-match the programme
+    # title against their catalog and wrongly check in a movie of the same name.
+    # Keeping the resolved item's title as the plain channel name avoids that.
+    li.setInfo('video', {'title': name, 'mediatype': 'video'})
+    li.setProperty('IsPlayable', 'true')
+    xbmcplugin.setResolvedUrl(HANDLE, True, li)
 
 
 def play_channel_by_index(i: str):
@@ -812,17 +1006,8 @@ def play_channel_by_index(i: str):
     update_recent_from_entry(channel_to_entry(ch))
 
     name = ch.get('name') or 'Live TV'
-    li = xbmcgui.ListItem(label=name, path=f"{url}|User-Agent={urllib.parse.quote(UA)}")
-    # The browse label for this channel may be swapped to "Channel - EPG programme
-    # title" (see _add_channel_item) so you can see what's on while scanning the
-    # list. Without an explicit label/title here, Kodi's playing-item info falls
-    # back to that browse label, and third-party scrobblers watching Kodi over
-    # JSON-RPC (e.g. SIMKL's own Kodi auto-scrobbler) fuzzy-match the programme
-    # title against their catalog and wrongly check in a movie of the same name.
-    # Keeping the resolved item's title as the plain channel name avoids that.
-    li.setInfo('video', {'title': name, 'mediatype': 'video'})
-    li.setProperty('IsPlayable', 'true')
-    xbmcplugin.setResolvedUrl(HANDLE, True, li)
+    plugin_url = build_url(action='livetv_play', i=str(ii))
+    _resolve_channel_playback(url, name, plugin_url)
 
 
 def play_channel_by_url(url: str, name: str = ''):
@@ -833,12 +1018,8 @@ def play_channel_by_url(url: str, name: str = ''):
     name = name or 'Live TV'
     update_recent_from_entry({'name': name, 'url': url, 'tvg_id': '', 'logo': '', 'group': ''})
 
-    li = xbmcgui.ListItem(label=name, path=f"{url}|User-Agent={urllib.parse.quote(UA)}")
-    # See play_channel_by_index — explicit title prevents an EPG-derived programme
-    # title from leaking into external scrobblers via Kodi's playing-item info.
-    li.setInfo('video', {'title': name, 'mediatype': 'video'})
-    li.setProperty('IsPlayable', 'true')
-    xbmcplugin.setResolvedUrl(HANDLE, True, li)
+    plugin_url = build_url(action='livetv_play_url', u=url, n=name)
+    _resolve_channel_playback(url, name, plugin_url)
 
 
 def play_m3u(url: str = '', name: str = ''):

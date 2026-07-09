@@ -89,3 +89,35 @@ def extract_schedule_from_file(xml_path: str, wanted_channel_ids: set, start_epo
     for cid in out:
         out[cid].sort(key=lambda p: p.get('start', 0))
     return out
+
+def search_programmes_from_file(xml_path: str, query: str, start_epoch: int, end_epoch: int, max_results: int = 200) -> list:
+    """Scan every channel's schedule (not just a wanted subset) for a title match
+    within the time window. Used by EPG search - unlike extract_schedule_from_file,
+    the channel set isn't known up front since we're looking for whichever channel(s)
+    happen to be airing a matching programme."""
+    ql = (query or '').strip().lower()
+    if not ql:
+        return []
+    out = []
+    real_path = xbmcvfs.translatePath(xml_path)
+    with open(real_path, 'rb') as f:
+        for _, elem in ET.iterparse(f, events=('end',)):
+            if elem.tag != 'programme':
+                continue
+            if len(out) >= max_results:
+                elem.clear();
+                continue
+            cid = elem.attrib.get('channel')
+            if not cid:
+                elem.clear(); continue
+            start = _parse_xmltv_time(elem.attrib.get('start', ''))
+            stop = _parse_xmltv_time(elem.attrib.get('stop', ''))
+            if not (start < end_epoch and stop > start_epoch):
+                elem.clear(); continue
+            title_el = elem.find('title')
+            title = (title_el.text or '').strip() if title_el is not None and title_el.text else ''
+            if ql in title.lower():
+                out.append({'channel': cid, 'title': title, 'start': start, 'stop': stop})
+            elem.clear()
+    out.sort(key=lambda p: p.get('start', 0))
+    return out

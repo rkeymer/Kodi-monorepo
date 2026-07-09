@@ -1782,6 +1782,17 @@ def router():
         livetv.do_search()
     elif action == "livetv_search_results":
         livetv.list_search_results()
+    elif action == "livetv_search_epg":
+        livetv.do_search_epg()
+    elif action == "livetv_search_epg_results":
+        livetv.list_search_epg_results()
+    elif action == "livetv_schedule_add":
+        livetv.do_schedule_add(params.get('u', ''), params.get('n', ''), params.get('lg', ''),
+                                params.get('t', ''), params.get('start', ''), params.get('stop', ''))
+    elif action == "livetv_scheduled":
+        livetv.list_scheduled_events()
+    elif action == "livetv_schedule_remove":
+        livetv.do_schedule_remove(params.get('id', ''))
     elif action == "livetv_play":
         livetv.play_channel_by_index(params.get('i', ''))
     elif action == "livetv_play_url":

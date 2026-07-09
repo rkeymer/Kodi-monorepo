@@ -53,6 +53,27 @@ def fetch_url(url: str, timeout: int = 60, retries: int = 3) -> bytes:
     raise last_err
 
 
+def check_stream_ok(url: str, timeout: int = 4) -> bool:
+    """Pre-flight probe for a live stream URL. Issues a GET (matching what real
+    playback does — this provider's own Stat/HEAD-style check has been seen to
+    behave differently to a GET) and closes the response as soon as headers come
+    back, without reading the body — it's a live TV stream, so reading it would
+    block/download indefinitely rather than complete.
+    """
+    headers = {'User-Agent': UA, 'Accept': '*/*'}
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        try:
+            status = getattr(resp, 'status', 200)
+            return 200 <= status < 400
+        finally:
+            resp.close()
+    except Exception as e:
+        _log(f"check_stream_ok failed for {url}: {repr(e)}")
+        return False
+
+
 def _backoff(attempt: int):
     time.sleep(DEFAULT_BACKOFF_SECONDS * (2 ** (attempt - 1)))
 

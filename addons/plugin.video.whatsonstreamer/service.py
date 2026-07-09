@@ -2,9 +2,12 @@ import sys
 import time
 import os
 import json
+import threading
+import urllib.parse
 
 import xbmc
 import xbmcaddon
+import xbmcgui
 import xbmcvfs
 
 ADDON_ID = 'plugin.video.whatsonstreamer'
@@ -31,6 +34,14 @@ except Exception:
 from resources.lib.playlist import build_m3u_url, build_epg_url
 from resources.lib.playlist_fetch import fetch_url
 from resources.lib import log
+from resources.lib import scheduler
+
+SCHEDULE_COUNTDOWN_SECONDS = 15
+SCHEDULE_GRACE_SECONDS = 600
+
+RESTART_DELAY_SECONDS = 3
+HEALTHY_SECONDS = 60
+MAX_RESTART_ATTEMPTS = 3
 
 PROFILE_DIR = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 CACHE_DIR = os.path.join(PROFILE_DIR, 'cache')
@@ -219,8 +230,135 @@ def run_manual() -> bool:
         return False
 
 
+def _play_channel_url(url: str, name: str):
+    plugin_url = 'plugin://%s/?action=livetv_play_url&u=%s&n=%s' % (
+        ADDON_ID, urllib.parse.quote(url or '', safe=''), urllib.parse.quote(name or '', safe=''))
+    xbmc.executebuiltin('PlayMedia(%s)' % plugin_url)
+
+
+def _check_scheduled_events(monitor):
+    now = int(time.time())
+    due = scheduler.due_events(now, grace_seconds=SCHEDULE_GRACE_SECONDS)
+
+    for ev in due:
+        # Mark notified immediately - whatever happens with the countdown below
+        # (switch, cancel, or Kodi shutting down mid-countdown), this must not
+        # fire again on the next loop tick.
+        scheduler.mark_notified(ev.get('id'))
+
+        channel_name = ev.get('channel_name') or 'Channel'
+        title = ev.get('title') or '(untitled)'
+
+        dialog = xbmcgui.DialogProgress()
+        dialog.create('WhatsOnStreamer', 'Switching to %s' % channel_name)
+        cancelled = False
+        try:
+            for i in range(SCHEDULE_COUNTDOWN_SECONDS):
+                if dialog.iscanceled():
+                    cancelled = True
+                    break
+                remaining = SCHEDULE_COUNTDOWN_SECONDS - i
+                pct = int((i * 100) / SCHEDULE_COUNTDOWN_SECONDS)
+                dialog.update(pct, 'Switching to %s in %ds\n%s\nSelect Cancel to stay on the current channel' % (
+                    channel_name, remaining, title))
+                if monitor.waitForAbort(1):
+                    cancelled = True
+                    break
+        finally:
+            dialog.close()
+
+        if not cancelled:
+            log.info('Scheduled switch firing: %s / %s' % (channel_name, title))
+            _play_channel_url(ev.get('channel_url', ''), channel_name)
+        else:
+            log.info('Scheduled switch cancelled: %s / %s' % (channel_name, title))
+
+    scheduler.prune_expired(now)
+
+
+class LiveTVWatchdog(xbmc.Player):
+    """Detects a Live TV channel dropping mid-playback (stream stalls, Kodi
+    treats it as EOF and closes it - see service.py history for the incident
+    that motivated this) and automatically restarts the same channel.
+
+    Deliberately does NOT react to onPlayBackStopped - that fires when the
+    user stops or switches channel on purpose, and must never trigger a
+    restart. Only onPlayBackEnded/onPlayBackError (an unexpected end while a
+    Live TV channel was being tracked) count as a drop.
+
+    Identifying "a Live TV channel is playing" can't rely on
+    Player.getPlayingFile() alone - for resolved plugin content that reports
+    whatever Kodi's video player considers the active file, which in testing
+    turned out to be the resolved stream path, not the plugin:// URL originally
+    requested (the watchdog silently never matched anything until this was
+    fixed). Instead, livetv.py's _resolve_channel_playback publishes both the
+    plugin:// URL and the raw stream URL as Window(10000) properties right
+    before resolving - readable cross-process within this Kodi instance -
+    and getPlayingFile() is matched against whichever one it turns out to be.
+    """
+
+    PROP_PLUGIN_URL = 'WhatsOnStreamer.livetv.plugin_url'
+    PROP_STREAM_URL = 'WhatsOnStreamer.livetv.stream_url'
+
+    def __init__(self):
+        super().__init__()
+        self._file = None
+        self._started_at = 0
+        self._fail_counts = {}
+
+    def onAVStarted(self):
+        try:
+            f = self.getPlayingFile()
+        except Exception:
+            return
+
+        win = xbmcgui.Window(10000)
+        plugin_url = win.getProperty(self.PROP_PLUGIN_URL)
+        stream_url = win.getProperty(self.PROP_STREAM_URL)
+
+        if plugin_url and (f == plugin_url or (stream_url and stream_url in f)):
+            self._file = plugin_url
+            self._started_at = time.time()
+        else:
+            self._file = None
+
+    def onPlayBackStopped(self):
+        self._file = None
+
+    def onPlayBackEnded(self):
+        self._handle_drop()
+
+    def onPlayBackError(self):
+        self._handle_drop()
+
+    def _handle_drop(self):
+        f = self._file
+        if not f:
+            return
+        self._file = None
+
+        if time.time() - self._started_at >= HEALTHY_SECONDS:
+            self._fail_counts[f] = 0
+        count = self._fail_counts.get(f, 0) + 1
+        self._fail_counts[f] = count
+
+        if count > MAX_RESTART_ATTEMPTS:
+            log.warn('Live TV watchdog: giving up on %s after %d attempts' % (f, count - 1))
+            self._fail_counts[f] = 0
+            xbmc.executebuiltin('Notification(WhatsOnStreamer,Channel kept dropping - giving up auto-reconnect,4000,warning)')
+            return
+
+        log.info('Live TV watchdog: unexpected drop (attempt %d/%d), restarting %s' % (count, MAX_RESTART_ATTEMPTS, f))
+        threading.Thread(target=self._restart, args=(f,), daemon=True).start()
+
+    def _restart(self, f: str):
+        xbmc.sleep(RESTART_DELAY_SECONDS * 1000)
+        xbmc.executebuiltin('PlayMedia(%s)' % f)
+
+
 def run_loop():
     monitor = xbmc.Monitor()
+    watchdog = LiveTVWatchdog()  # noqa: F841 - kept alive for its Player callbacks
     log.info('Service started')
     monitor.waitForAbort(15)
 
@@ -257,6 +395,11 @@ def run_loop():
 
         except Exception as e:
             log.warn('Service loop error: %s' % repr(e))
+
+        try:
+            _check_scheduled_events(monitor)
+        except Exception as e:
+            log.warn('Scheduled-events check error: %s' % repr(e))
 
         if monitor.waitForAbort(60):
             break

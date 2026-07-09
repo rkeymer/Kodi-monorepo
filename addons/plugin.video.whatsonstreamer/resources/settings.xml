@@ -95,6 +95,7 @@
     <setting id="livetv_recent_max" type="number" label="Max Recently Watched" default="50" />
     <setting id="livetv_on_now_pinned_recent" type="number" label="Pinned recents on On Now" default="8" />
     <setting id="livetv_coming_up_hours" type="number" label="Coming Up horizon (hours)" default="5" />
+    <setting id="livetv_epg_search_hours" type="number" label="Search EPG horizon (hours)" default="48" />
   </category>
 
   <category label="Live TV - Channel Filtering">
