@@ -31,19 +31,25 @@ class IptvApi:
             self._username = addon.getSettingString("iptv_username").strip()
             self._password = addon.getSettingString("iptv_password").strip()
             self._series_enabled = addon.getSettingBool("iptv_series_enabled")
+            self._vod_enabled = addon.getSettingBool("iptv_vod_enabled")
             ttl_hours = addon.getSettingInt("iptv_catalog_ttl_hours") or 24
         except Exception:
             self._base_url = ""
             self._username = ""
             self._password = ""
             self._series_enabled = True
+            self._vod_enabled = True
             ttl_hours = 24
 
         self._cache_series = DiskCache("iptv_series", ttl=max(1, ttl_hours) * 3600)
         self._cache_series_info = DiskCache("iptv_series_info", ttl=_SERIES_INFO_TTL)
+        self._cache_vod = DiskCache("iptv_vod", ttl=max(1, ttl_hours) * 3600)
 
     def is_configured(self):
         return bool(self._series_enabled and self._base_url and self._username and self._password)
+
+    def is_vod_configured(self):
+        return bool(self._vod_enabled and self._base_url and self._username and self._password)
 
     # ------------------------------------------------------------------
     def _player_api(self, action, **params):
@@ -140,3 +146,48 @@ class IptvApi:
             stream_url = f"{self._base_url}/series/{self._username}/{self._password}/{stream_id}.{ext}"
             return stream_url, display
         return None, None
+
+    # ------------------------------------------------------------------
+    # Movies (Xtream VOD) — mirrors the series lookup above, just without
+    # the season/episode breakdown: one catalog entry per movie.
+    # ------------------------------------------------------------------
+    def get_vod_catalog(self, force=False):
+        if not force:
+            cached = self._cache_vod.get("all")
+            if cached is not None:
+                return cached
+        try:
+            vod = self._player_api("get_vod_streams")
+            if not isinstance(vod, list):
+                vod = []
+        except Exception as e:
+            _log(f"get_vod_catalog failed: {e}")
+            vod = []
+        _log(f"VOD catalog fetched: {len(vod)} movies")
+        self._cache_vod.set("all", vod)
+        return vod
+
+    def find_vod_item(self, movie_title):
+        norm_title = _normalize(movie_title)
+        best_score, best_item = 0.0, None
+        for item in self.get_vod_catalog():
+            score = _score(norm_title, _normalize(item.get("name", "")))
+            if score > best_score:
+                best_score, best_item = score, item
+        return best_item if best_score >= 0.55 else None
+
+    def is_movie_available(self, movie_title):
+        return self.find_vod_item(movie_title) is not None
+
+    def find_movie(self, movie_title):
+        """Same shape as AllDebridApi.find_movie: (stream_url, display_name) or (None, None)."""
+        item = self.find_vod_item(movie_title)
+        if not item:
+            return None, None
+        stream_id = item.get("stream_id")
+        if not stream_id:
+            return None, None
+        ext = item.get("container_extension") or "mp4"
+        display = item.get("name") or movie_title
+        stream_url = f"{self._base_url}/movie/{self._username}/{self._password}/{stream_id}.{ext}"
+        return stream_url, display

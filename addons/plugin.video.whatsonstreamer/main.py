@@ -656,6 +656,7 @@ def show_movies():
             year = movie.get("year", "")
             imdb_id = ids.get("imdb", "")
             tmdb_id = ids.get("tmdb", "")
+            simkl_id = ids.get("simkl", "")
             poster_path = movie.get("poster") or movie.get("poster_path")
             overview = movie.get("overview") or movie.get("plot") or ""
             release_date = movie.get("released") or movie.get("release_date") or ""
@@ -693,9 +694,13 @@ def show_movies():
             if overview:
                 info["plot"] = overview
 
-            url = build_url(action="open_homelander", title=title, imdb=imdb_id, tmdb=tmdb_id, year=year, media_type="movie")
-            
-            add_item(label, url=url, info=info, art=art, is_folder=False)
+            url = build_url(
+                action="show_movie",
+                title=title, imdb=imdb_id, tmdb=str(tmdb_id), year=year,
+                simkl_poster=poster_path or "", simkl_id=str(simkl_id),
+            )
+
+            add_item(label, url=url, info=info, art=art, is_folder=True)
 
         end_dir()
 
@@ -712,81 +717,85 @@ def show_search_menu():
     end_dir()
 
 
-def _homelander_search(prompt, homelander_url_fn):
-    term = xbmcgui.Dialog().input(prompt, type=xbmcgui.INPUT_ALPHANUM)
-    if not term or not term.strip():
-        return
-    homelander_url = homelander_url_fn(term.strip())
-    xbmc.sleep(500)
-    xbmc.executebuiltin(f'ActivateWindow(10025,"{homelander_url}",return)')
-
-
-def search_series():
+def _simkl_search_and_open(noun, dialog_title, search_fn, target_action, extra_url_params=None):
+    """Non-folder action: prompt + select, then Container.Update into our own
+    listing (show_seasons for series, show_movie for movies) — the same
+    screen used for scrobbled/watching items, so the IPTV / local / AllDebrid
+    / Homelander choice is preserved. See livetv.list_root's Search item for
+    why this must stay a plain script invocation rather than a folder item —
+    a folder item racing its own in-flight GetDirectory against this dialog
+    is a silent no-op.
+    """
     addon = xbmcaddon.Addon()
-    tmdb = TmdbApi(addon)
+    api = SimklApi(addon)
 
-    if not tmdb.is_configured():
+    if not api.is_configured():
         xbmcgui.Dialog().notification(
-            "Search Series",
-            "TMDB API key required. Add it in Settings.",
+            dialog_title,
+            "SIMKL Client ID required. Add it in Settings.",
             xbmcgui.NOTIFICATION_WARNING,
         )
         return
 
-    term = xbmcgui.Dialog().input("Search Series", type=xbmcgui.INPUT_ALPHANUM)
+    term = xbmcgui.Dialog().input(dialog_title, type=xbmcgui.INPUT_ALPHANUM)
     if not term or not term.strip():
         return
 
     try:
-        results = tmdb.search_tv(term.strip())
+        items = search_fn(api, term.strip())
     except Exception as e:
-        xbmc.log(f"[WhatsOnStreamer] TMDB search_tv failed: {e}", xbmc.LOGERROR)
-        xbmcgui.Dialog().notification("Search Series", "TMDB search failed", xbmcgui.NOTIFICATION_ERROR)
+        xbmc.log(f"[WhatsOnStreamer] SIMKL search ({noun}) failed: {e}", xbmc.LOGERROR)
+        xbmcgui.Dialog().notification(dialog_title, "SIMKL search failed", xbmcgui.NOTIFICATION_ERROR)
         return
 
-    items = results.get("results") or []
     if not items:
-        xbmcgui.Dialog().notification("Search Series", "No results found", xbmcgui.NOTIFICATION_INFO)
+        xbmcgui.Dialog().notification(dialog_title, "No results found", xbmcgui.NOTIFICATION_INFO)
         return
 
     # Build selection list (cap at 10 for usability)
     items = items[:10]
     labels = []
     for r in items:
-        name = r.get("name") or r.get("original_name") or "Unknown"
-        first_air = (r.get("first_air_date") or "")[:4]
-        labels.append(f"{name} ({first_air})" if first_air else name)
+        title = r.get("title") or "Unknown"
+        year = r.get("year") or ""
+        labels.append(f"{title} ({year})" if year else title)
 
-    choice = xbmcgui.Dialog().select("Select Series", labels)
+    choice = xbmcgui.Dialog().select(f"Select {noun}", labels)
     if choice < 0:
         return
 
     chosen = items[choice]
-    tmdb_id = chosen.get("id")
-    title = chosen.get("name") or chosen.get("original_name") or term.strip()
-    year = (chosen.get("first_air_date") or "")[:4]
+    ids = chosen.get("ids") or {}
+    title = chosen.get("title") or term.strip()
+    year = str(chosen.get("year") or "")
+    imdb_id = ids.get("imdb") or ""
+    tmdb_id = ids.get("tmdb") or ""
+    simkl_id = ids.get("simkl") or ""
+    poster_path = chosen.get("poster") or ""
 
-    try:
-        ext = tmdb.tv_external_ids(int(tmdb_id))
-    except Exception as e:
-        xbmc.log(f"[WhatsOnStreamer] TMDB tv_external_ids failed: {e}", xbmc.LOGERROR)
-        ext = {}
-
-    imdb_id = ext.get("imdb_id") or ""
-    tvdb_id = ext.get("tvdb_id") or ""
-
-    homelander_url = build_homelander_url("seasons", imdb_id, str(tmdb_id), title, year)
+    url = build_url(
+        action=target_action,
+        title=title, imdb=imdb_id, tmdb=str(tmdb_id), year=year,
+        simkl_poster=poster_path, simkl_id=str(simkl_id),
+        **(extra_url_params or {}),
+    )
     xbmc.sleep(500)
-    xbmc.executebuiltin(f'ActivateWindow(10025,"{homelander_url}",return)')
+    xbmc.executebuiltin(f'Container.Update({url})')
+
+
+def search_series():
+    _simkl_search_and_open(
+        "Series", "Search Series",
+        lambda api, term: api.search_shows(term),
+        "show_seasons", extra_url_params={"next": ""},
+    )
 
 
 def search_movies():
-    _homelander_search(
-        "Search Movies",
-        lambda term: (
-            "plugin://plugin.video.homelander/?action=movieSearchterm&name="
-            + urllib.parse.quote(term)
-        ),
+    _simkl_search_and_open(
+        "Movie", "Search Movies",
+        lambda api, term: api.search_movies(term),
+        "show_movie",
     )
 
 
@@ -1233,6 +1242,116 @@ def show_season_episodes(params):
     end_dir()
 
 
+# --------------------------
+# Single movie screen — the movie equivalent of show_season_episodes: one
+# item, but with the same local/AllDebrid/IPTV/Homelander choice.
+# --------------------------
+def show_movie_item(params):
+    title = params.get("title", "")
+    imdb_id = params.get("imdb", "")
+    tmdb_id = params.get("tmdb", "")
+    year = params.get("year", "")
+    simkl_poster = params.get("simkl_poster", "")
+    simkl_id = params.get("simkl_id", "")
+
+    xbmcplugin.setPluginCategory(HANDLE, title)
+    xbmcplugin.setContent(HANDLE, "movies")
+    addon = xbmcaddon.Addon()
+
+    overview = ""
+    vote_average = 0.0
+    art_url = simkl_poster_url(simkl_poster) if simkl_poster else None
+
+    if tmdb_id:
+        try:
+            tmdb = TmdbApi(addon)
+            if tmdb.is_configured():
+                details = tmdb.movie_details(int(tmdb_id))
+                overview = details.get("overview") or ""
+                vote_average = details.get("vote_average") or 0.0
+                if not year:
+                    year = (details.get("release_date") or "")[:4]
+                tmdb_art = tmdb_poster_url(details.get("poster_path"))
+                if tmdb_art:
+                    art_url = tmdb_art
+        except Exception as e:
+            xbmc.log(f"[WhatsOnStreamer] TMDB movie_details failed: {e}", xbmc.LOGERROR)
+
+    art = {"thumb": art_url, "poster": art_url, "icon": art_url} if art_url else None
+
+    hl_url = build_url(action="open_homelander", title=title, imdb=imdb_id, tmdb=tmdb_id, year=year, media_type="movie")
+
+    local_path = None
+    try:
+        lf_api = LocalMediaApi()
+        if lf_api.is_movies_configured():
+            local_path = lf_api.find_movie(title)
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] Local movie lookup failed: {e}", xbmc.LOGERROR)
+
+    iptv_ok = False
+    try:
+        iptv_api = IptvApi()
+        if iptv_api.is_vod_configured():
+            iptv_ok = iptv_api.is_movie_available(title)
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] IPTV movie availability check failed: {e}", xbmc.LOGERROR)
+
+    ad_ok = False
+    try:
+        ad_api = AllDebridApi()
+        if ad_api.is_configured():
+            ad_ok = ad_api.is_movie_available(title)
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] AllDebrid movie availability check failed: {e}", xbmc.LOGERROR)
+
+    label = f"{title} ({year})" if year else title
+    if ad_ok:
+        label += "  [COLOR lime]● AD[/COLOR]"
+    if local_path:
+        label += "  [COLOR dodgerblue]● LF[/COLOR]"
+    if iptv_ok:
+        label += "  [COLOR orange]● IPTV[/COLOR]"
+
+    # Default click priority: local file -> IPTV -> Homelander (catch-all),
+    # same rationale as show_season_episodes.
+    if local_path:
+        default_url = local_path
+        is_playable = True
+    elif iptv_ok:
+        default_url = build_url(action="play_iptv_movie", title=title)
+        is_playable = False
+    else:
+        default_url = hl_url
+        is_playable = False
+
+    ctx = [
+        ("Play via AllDebrid", f"RunPlugin({build_url(action='play_alldebrid_movie', title=title)})"),
+    ]
+    if local_path:
+        ctx.append(("Play local file", f"RunPlugin({build_url(action='play_local_movie', title=title)})"))
+    ctx.append(("Play via Homelander", f"RunPlugin({hl_url})"))
+    ctx.append(("Play via IPTV", f"RunPlugin({build_url(action='play_iptv_movie', title=title)})"))
+    if simkl_id:
+        ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id)})"))
+
+    info = {"title": title}
+    if year:
+        info["year"] = str(year)
+    if overview:
+        info["plot"] = overview
+    if vote_average:
+        info["rating"] = float(vote_average)
+
+    add_item(
+        label, url=default_url,
+        info=info, art=art, context_menu=ctx,
+        is_folder=False, is_playable=is_playable,
+    )
+
+    end_dir()
+
+
 _AD_VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts", ".m2ts"}
 
 
@@ -1511,6 +1630,69 @@ def play_local(params):
 
 
 # --------------------------
+# Movie playback (AllDebrid / IPTV / local) — same shape as the episode
+# handlers above, just keyed by title alone (no season/episode).
+# --------------------------
+def play_alldebrid_movie(params):
+    title = params.get("title", "")
+    try:
+        ad_api = AllDebridApi()
+        if not ad_api.is_configured():
+            xbmcgui.Dialog().notification("AllDebrid", "API key not set — add it in Settings", xbmcgui.NOTIFICATION_WARNING, 3000)
+            return
+        stream_url, fname = ad_api.find_movie(title)
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer][AllDebrid] find_movie error: {e}", xbmc.LOGERROR)
+        stream_url, fname = None, None
+
+    if not stream_url:
+        xbmcgui.Dialog().notification("AllDebrid", f"No match: {title}", xbmcgui.NOTIFICATION_WARNING, 3000)
+        return
+
+    label = fname or title
+    _ad_resolve_and_play(stream_url, label)
+
+
+def play_iptv_movie(params):
+    title = params.get("title", "")
+    try:
+        iptv_api = IptvApi()
+        if not iptv_api.is_vod_configured():
+            xbmcgui.Dialog().notification("IPTV", "Provider not set — add it in Settings", xbmcgui.NOTIFICATION_WARNING, 3000)
+            return
+        stream_url, display = iptv_api.find_movie(title)
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer][IPTV] find_movie error: {e}", xbmc.LOGERROR)
+        stream_url, display = None, None
+
+    if not stream_url:
+        xbmcgui.Dialog().notification("IPTV", f"No match: {title}", xbmcgui.NOTIFICATION_WARNING, 3000)
+        return
+
+    label = display or title
+    _ad_resolve_and_play(stream_url, label, user_agent=IPTV_UA)
+
+
+def play_local_movie(params):
+    title = params.get("title", "")
+
+    lf_api = LocalMediaApi()
+    if not lf_api.is_movies_configured():
+        xbmcgui.Dialog().notification("Local Media", "Movies base path not set — add it in Settings", xbmcgui.NOTIFICATION_WARNING, 3000)
+        return
+
+    file_path = lf_api.find_movie(title)
+    if not file_path:
+        xbmcgui.Dialog().notification("Local Media", f"No file found: {title}", xbmcgui.NOTIFICATION_WARNING, 3000)
+        return
+
+    li = xbmcgui.ListItem(label=title, path=file_path)
+    li.setInfo("video", {"title": title})
+    li.setProperty("IsPlayable", "true")
+    xbmc.Player().play(file_path, li)
+
+
+# --------------------------
 # Trailer playback
 # --------------------------
 def play_trailer(params):
@@ -1632,6 +1814,8 @@ def router():
         show_seasons(params)
     elif action == "show_season_episodes":
         show_season_episodes(params)
+    elif action == "show_movie":
+        show_movie_item(params)
     elif action == "play_trailer":
         play_trailer(params)
     elif action == "open_homelander":
@@ -1652,6 +1836,12 @@ def router():
         play_local(params)
     elif action == "play_iptv":
         play_iptv(params)
+    elif action == "play_alldebrid_movie":
+        play_alldebrid_movie(params)
+    elif action == "play_local_movie":
+        play_local_movie(params)
+    elif action == "play_iptv_movie":
+        play_iptv_movie(params)
     elif action.startswith("show_"):
         show_show_info(action)
     else:

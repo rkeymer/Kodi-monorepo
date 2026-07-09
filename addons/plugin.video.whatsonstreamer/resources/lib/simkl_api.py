@@ -2,6 +2,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
+import xbmc
 
 from resources.lib.cache import DiskCache
 
@@ -63,6 +64,21 @@ class SimklApi:
     def get_show_details_if_cached(self, simkl_id: int):
         """Returns cached show details without a network call, or None."""
         return _cache_show.get(str(simkl_id))
+
+    def search_shows(self, query: str):
+        """GET /search/tv — not cached (user-initiated search). Returns a list of results."""
+        data = self._get("/search/tv", params={"q": query}, auth=False)
+        if self.debug:
+            xbmc.log(f"[WhatsOnStreamer][SIMKL] search_shows({query!r}) -> {data}", xbmc.LOGINFO)
+        return data if isinstance(data, list) else []
+
+    def search_movies(self, query: str):
+        """GET /search/movie — not cached (user-initiated search). Returns a list of results."""
+        data = self._get("/search/movie", params={"q": query}, auth=False)
+        if self.debug:
+            xbmc.log(f"[WhatsOnStreamer][SIMKL] search_movies({query!r}) -> {data}", xbmc.LOGINFO)
+        return data if isinstance(data, list) else []
+
     # -------------------------
     # PIN / device flow (already working)
     # -------------------------

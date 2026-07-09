@@ -38,12 +38,18 @@ class LocalMediaApi:
 
     def __init__(self):
         try:
-            self._base_path = xbmcaddon.Addon().getSettingString("local_media_path").strip()
+            addon = xbmcaddon.Addon()
+            self._base_path = addon.getSettingString("local_media_path").strip()
+            self._movies_base_path = addon.getSettingString("local_movies_path").strip()
         except Exception:
             self._base_path = ""
+            self._movies_base_path = ""
 
     def is_configured(self):
         return bool(self._base_path) and os.path.isdir(self._base_path)
+
+    def is_movies_configured(self):
+        return bool(self._movies_base_path) and os.path.isdir(self._movies_base_path)
 
     def _find_show_dir(self, show_title):
         norm_target = _normalize(show_title)
@@ -149,3 +155,45 @@ class LocalMediaApi:
         except OSError:
             return None
         return None
+
+    # ------------------------------------------------------------------
+    # Movies — entries in the movies base folder are either a video file
+    # directly, or a folder (picks the largest video file inside, i.e. the
+    # feature film rather than a sample/extra).
+    # ------------------------------------------------------------------
+    def _find_movie_entry(self, title):
+        norm_target = _normalize(title)
+        try:
+            entries = os.listdir(self._movies_base_path)
+        except OSError:
+            return None, False
+        best, best_score, best_is_dir = None, 0.0, False
+        for entry in entries:
+            full = os.path.join(self._movies_base_path, entry)
+            is_dir = os.path.isdir(full)
+            if not is_dir and not _is_video(entry):
+                continue
+            norm_entry = _normalize(entry)
+            if norm_entry == norm_target:
+                return full, is_dir
+            if norm_target in norm_entry or norm_entry in norm_target:
+                score = len(min(norm_target, norm_entry, key=len)) / max(len(norm_target), len(norm_entry), 1)
+                if score > best_score:
+                    best_score, best, best_is_dir = score, full, is_dir
+        if best and best_score >= 0.7:
+            return best, best_is_dir
+        return None, False
+
+    def find_movie(self, title):
+        entry, is_dir = self._find_movie_entry(title)
+        if not entry:
+            return None
+        if not is_dir:
+            return entry
+        try:
+            candidates = [os.path.join(entry, f) for f in os.listdir(entry) if _is_video(f)]
+        except OSError:
+            return None
+        if not candidates:
+            return None
+        return max(candidates, key=os.path.getsize)

@@ -210,3 +210,37 @@ class AllDebridApi:
                         return stream_url, fname.rsplit("/", 1)[-1]
 
         return None, None
+
+    # ------------------------------------------------------------------
+    # Movies — same title-matching magnets, but no season/episode filter;
+    # picks the largest video file in the best-matching magnet (the feature
+    # film, as opposed to samples/extras).
+    # ------------------------------------------------------------------
+    def is_movie_available(self, title):
+        norm_title = _normalize(title)
+        magnets = self._get_all_magnets()
+        return any(_score(norm_title, _normalize(mag.get("filename", ""))) >= 0.55 for mag in magnets)
+
+    def find_movie(self, title):
+        """Returns (streaming_url, display_filename) or (None, None)."""
+        norm_title = _normalize(title)
+        magnets = self._get_all_magnets()
+        _log(f"Searching for movie '{norm_title}' in {len(magnets)} magnets")
+
+        scored = [(_score(norm_title, _normalize(mag.get("filename", ""))), mag) for mag in magnets]
+        scored = [sm for sm in scored if sm[0] >= 0.55]
+        scored.sort(key=lambda x: -x[0])
+
+        for _, mag in scored[:6]:
+            files = self._get_magnet_files(mag["id"])
+            video_files = [(fname, link, sz) for fname, link, sz in files if _is_video(fname)]
+            if not video_files:
+                continue
+            fname, link, _sz = max(video_files, key=lambda f: f[2])
+            _log(f"Movie match: '{fname}' in magnet '{mag['filename']}'")
+            stream_url = self.unlock_link(link)
+            _log(f"Stream URL: {'ok' if stream_url else 'FAILED'}")
+            if stream_url:
+                return stream_url, fname.rsplit("/", 1)[-1]
+
+        return None, None

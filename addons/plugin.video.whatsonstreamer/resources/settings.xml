@@ -28,6 +28,10 @@
              type="text"
              label="Series base folder (e.g. C:\media\series)"
              default=""/>
+    <setting id="local_movies_path"
+             type="text"
+             label="Movies base folder (e.g. C:\media\movies)"
+             default=""/>
   </category>
 
   <category label="TMDB">
