@@ -293,6 +293,27 @@ def _warm_plan_movies(simkl, tmdb) -> int:
     return warmed
 
 
+def _warm_recommendations(simkl) -> tuple:
+    """Builds and saves the "Recommended" shows/movies lists (resources/lib/recommendations.py)
+    from the account's SIMKL watch history, so the Recommended screen is always a fast cache
+    read in the foreground rather than a ~150-item live sweep. Returns (num_shows, num_movies)."""
+    from resources.lib import recommendations
+
+    data = _safe_call(lambda: recommendations.build(simkl), 'Recommendations build')
+    if not data:
+        return (0, 0)
+    recommendations.save(data)
+    return (len(data.get('shows') or []), len(data.get('movies') or []))
+
+
+def _safe_call(fn, label):
+    try:
+        return fn()
+    except Exception as e:
+        log.warn('%s failed: %s' % (label, repr(e)))
+        return None
+
+
 def _warm_whatsupnext_cache(force: bool = False):
     """Pre-fetches TmdbApi.tv_details()/movie_details() for every currently
     watching show and planned movie, so New Episodes/Upcoming Episodes/Movies
@@ -300,6 +321,8 @@ def _warm_whatsupnext_cache(force: bool = False):
     lookup loop, done inline in main.py on a cold cache, is what makes first
     open slow). Both TMDB calls already check their own disk cache before
     making a network call, so running this often costs nothing once warm.
+    Also (re)builds the Recommended lists (resources/lib/recommendations.py)
+    on the same schedule, for the same reason.
 
     force=True (the manual Tools-menu trigger) mirrors run_manual()/_do_update()
     above: skips both the "disabled" and the last-run gates entirely, same as
@@ -332,14 +355,17 @@ def _warm_whatsupnext_cache(force: bool = False):
 
     warmed_shows = _warm_watching_shows(simkl, tmdb)
     warmed_movies = _warm_plan_movies(simkl, tmdb)
+    rec_shows, rec_movies = _warm_recommendations(simkl)
 
     st = _load_state()
     st['last_whatsupnext_warm'] = int(time.time())
     _save_state(st)
 
-    log.info('WhatsUpNext cache warm: refreshed %d shows, %d movies' % (warmed_shows, warmed_movies))
+    log.info('WhatsUpNext cache warm: refreshed %d shows, %d movies, %d/%d recommendations' % (
+        warmed_shows, warmed_movies, rec_shows, rec_movies))
     if force:
-        xbmc.executebuiltin('Notification(WhatsOnStreamer,Warmed %d shows / %d movies,4000,info)' % (warmed_shows, warmed_movies))
+        xbmc.executebuiltin('Notification(WhatsOnStreamer,Warmed %d shows / %d movies / %d+%d recs,4000,info)' % (
+            warmed_shows, warmed_movies, rec_shows, rec_movies))
 
 
 def _with_auto_flag(plugin_url: str) -> str:

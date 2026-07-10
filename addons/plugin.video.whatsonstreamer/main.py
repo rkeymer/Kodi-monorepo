@@ -16,6 +16,7 @@ from resources.lib.ui import get_params, build_url, add_folder, add_item, end_di
 from resources.lib import livetv
 from resources.lib import settings_reset
 from resources.lib import legacy_import
+from resources.lib import recommendations
 
 
 ADDON = xbmcaddon.Addon()
@@ -265,6 +266,7 @@ def show_whatsupnext_menu():
     add_folder("New Episodes", "new", icon=f"{MEDIA_PATH}/new.png")
     add_folder("Upcoming Episodes", "upcoming", icon=f"{MEDIA_PATH}/upcoming.png")
     add_folder("Movies", "movies", icon=f"{MEDIA_PATH}/movies.png")
+    add_folder("Recommended", "recommended_menu", icon=f"{MEDIA_PATH}/favourites.png")
     add_folder("AllDebrid", "alldebrid_menu", icon=f"{MEDIA_PATH}/alldebrid.png")
     add_folder("Search", "search_menu", icon=f"{MEDIA_PATH}/search.png")
     end_dir()
@@ -431,10 +433,10 @@ def show_new_episodes():
             if simkl_votes:
                 info["votes"] = str(simkl_votes)
 
-            ctx = [(
-                "Watch Trailer",
-                f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id)})",
-            )]
+            ctx = [
+                ("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='show')})"),
+                ("Remove", f"RunPlugin({build_url(action='recommended_remove', kind='show', simkl_id=simkl_id, title=title)})"),
+            ]
             add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx)
 
         end_dir()
@@ -479,6 +481,7 @@ def show_upcoming():
 
             title = show.get("title", "Unknown title")
             tmdb_id = ids.get("tmdb", "")
+            simkl_id = ids.get("simkl", "")
             poster_path = show.get("poster")
 
             watched = it.get("watched_episodes_count") or 0
@@ -503,7 +506,7 @@ def show_upcoming():
                 if not airdate:
                     airdate = tmdb_next_episode_airdate(addon, tmdb_id)
 
-            rows.append((not_aired, title, next_to_watch, airdate, poster_path))
+            rows.append((not_aired, title, next_to_watch, airdate, poster_path, simkl_id))
 
         if not rows:
             add_item("No upcoming episodes found (or you have new aired episodes instead).")
@@ -512,7 +515,7 @@ def show_upcoming():
 
         # Sort by newest known airdate first (descending). Unknown dates go bottom.
         def _sort_key(row):
-            _, title, _, airdate, _ = row
+            _, title, _, airdate, _, _ = row
             d = _parse_ymd_date(airdate)
             if d is None:
                 return (1, float("inf"), title.lower())
@@ -522,7 +525,7 @@ def show_upcoming():
 
         show_posters = addon.getSettingBool("show_posters")
 
-        for _, title, _, airdate, poster_path in rows:
+        for _, title, _, airdate, poster_path, simkl_id in rows:
             # Keep your existing label rules/countdown, just change ordering.
             d = _days_until(airdate)
 
@@ -542,7 +545,10 @@ def show_upcoming():
                 if url:
                     art = {"thumb": url, "poster": url, "icon": url}
 
-            add_item(label, info={"title": title}, art=art)
+            ctx = [
+                ("Remove", f"RunPlugin({build_url(action='recommended_remove', kind='show', simkl_id=simkl_id, title=title)})"),
+            ] if simkl_id else None
+            add_item(label, info={"title": title}, art=art, context_menu=ctx)
 
         end_dir()
 
@@ -710,6 +716,165 @@ def show_movies():
         end_dir()
 
 
+def show_recommended_menu():
+    xbmcplugin.setPluginCategory(HANDLE, "Recommended")
+    add_folder("Shows", "recommended_shows", icon=f"{MEDIA_PATH}/new.png")
+    add_folder("Movies", "recommended_movies", icon=f"{MEDIA_PATH}/movies.png")
+    end_dir()
+
+
+def _add_recommended_item(item, kind):
+    """Shared renderer for show_recommended_shows()/show_recommended_movies().
+    Normal click opens the same target screen a Search selection would
+    (show_seasons for shows, show_movie for movies - see search_series()/
+    search_movies()), rather than a custom season-1 shortcut. Right-click
+    offers Watch Trailer (same as New Episodes) and Remove, which marks the
+    item 'dropped' in SIMKL and drops it from the cached list immediately."""
+    title = item.get("title") or "Unknown title"
+    year = item.get("year") or ""
+    imdb_id = item.get("imdb_id") or ""
+    tmdb_id = item.get("tmdb_id") or ""
+    simkl_id = item.get("simkl_id") or ""
+    poster_path = item.get("poster")
+    overview = item.get("overview") or ""
+    rating = item.get("rating") or 0.0
+    votes = item.get("votes") or 0
+    because = item.get("because") or []
+
+    label = f"{title} ({year})" if year else title
+
+    art = None
+    show_posters = xbmcaddon.Addon().getSettingBool("show_posters")
+    if show_posters:
+        purl = simkl_poster_url(poster_path)
+        if purl:
+            art = {"thumb": purl, "poster": purl, "icon": purl}
+
+    plot = overview
+    if because:
+        hint = f"Because you watched: {', '.join(because)}"
+        plot = (plot + "\n\n" if plot else "") + hint
+    if rating:
+        votes_str = f"  ({votes:,})" if votes else ""
+        rating_line = f"SIMKL  {rating:.1f}/10{votes_str}"
+        plot = (plot + "\n\n" if plot else "") + rating_line
+
+    info = {"title": title}
+    if plot:
+        info["plot"] = plot
+    if rating:
+        info["rating"] = float(rating)
+    if votes:
+        info["votes"] = str(votes)
+
+    if kind == "show":
+        url = build_url(
+            action="show_seasons",
+            title=title, imdb=imdb_id, tmdb=tmdb_id, year=year, next="",
+            simkl_poster=poster_path or "", simkl_id=simkl_id,
+        )
+    else:
+        url = build_url(
+            action="show_movie",
+            title=title, imdb=imdb_id, tmdb=str(tmdb_id), year=year,
+            simkl_poster=poster_path or "", simkl_id=str(simkl_id),
+        )
+
+    ctx = [
+        ("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind=kind)})"),
+        ("Add to Watchlist", f"RunPlugin({build_url(action='recommended_watchlist', kind=kind, simkl_id=simkl_id, title=title)})"),
+        ("Remove", f"RunPlugin({build_url(action='recommended_remove', kind=kind, simkl_id=simkl_id, title=title)})"),
+    ]
+
+    add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx)
+
+
+def show_recommended_shows():
+    xbmcplugin.setPluginCategory(HANDLE, "Recommended Shows")
+    data = recommendations.load()
+    shows = (data or {}).get("shows") or []
+    if not shows:
+        add_item("No recommendations yet — run Tools -> 'WhatsUpNext: Warm episode cache now' to generate them.")
+        end_dir()
+        return
+    for item in shows:
+        _add_recommended_item(item, "show")
+    end_dir()
+
+
+def show_recommended_movies():
+    xbmcplugin.setPluginCategory(HANDLE, "Recommended Movies")
+    data = recommendations.load()
+    movies = (data or {}).get("movies") or []
+    if not movies:
+        add_item("No recommendations yet — run Tools -> 'WhatsUpNext: Warm episode cache now' to generate them.")
+        end_dir()
+        return
+    for item in movies:
+        _add_recommended_item(item, "movie")
+    end_dir()
+
+
+def recommended_remove(params):
+    """Context-menu 'Remove' on a Recommended item: marks it 'dropped' in SIMKL
+    (so it won't be suggested again - see recommendations.build()'s dropped-list
+    exclusion) and drops it from the cached list so it disappears immediately."""
+    kind = params.get("kind", "show")
+    title = params.get("title", "this title")
+    try:
+        simkl_id = int(params.get("simkl_id", ""))
+    except (TypeError, ValueError):
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Missing SIMKL id", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    addon = xbmcaddon.Addon()
+    api = SimklApi(addon)
+    if not api.is_authorized():
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Not authorized with SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    try:
+        api.add_to_dropped(kind, simkl_id)
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] add_to_dropped failed for {title}: {e}", xbmc.LOGERROR)
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Failed to mark as dropped in SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    recommendations.remove_item(kind, simkl_id)
+    xbmcgui.Dialog().notification("WhatsOnStreamer", f"Dropped: {title}", xbmcgui.NOTIFICATION_INFO, 1500)
+
+
+def recommended_watchlist(params):
+    """Context-menu 'Add to Watchlist' on a Recommended item: shows go straight to
+    'watching' in SIMKL (SimklApi.add_to_watchlist), movies go to 'plantowatch' -
+    SIMKL doesn't have a 'watching' status for movies. Drops it from the cached
+    Recommended list immediately, same as recommended_remove()."""
+    kind = params.get("kind", "show")
+    title = params.get("title", "this title")
+    try:
+        simkl_id = int(params.get("simkl_id", ""))
+    except (TypeError, ValueError):
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Missing SIMKL id", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    addon = xbmcaddon.Addon()
+    api = SimklApi(addon)
+    if not api.is_authorized():
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Not authorized with SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    try:
+        api.add_to_watchlist(kind, simkl_id)
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] add_to_watchlist failed for {title}: {e}", xbmc.LOGERROR)
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Failed to add to watchlist in SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    recommendations.remove_item(kind, simkl_id)
+    status_label = "Watching" if kind == "show" else "Watchlist"
+    xbmcgui.Dialog().notification("WhatsOnStreamer", f"Added to {status_label}: {title}", xbmcgui.NOTIFICATION_INFO, 1500)
+
+
 def show_search_menu():
     xbmcplugin.setPluginCategory(HANDLE, "Search")
     add_item("Series", url=build_url(action="search_series"), art={"icon": f"{MEDIA_PATH}/new.png", "thumb": f"{MEDIA_PATH}/new.png"})
@@ -770,7 +935,11 @@ def _simkl_search_and_open(noun, dialog_title, search_fn, target_action, extra_u
     year = str(chosen.get("year") or "")
     imdb_id = ids.get("imdb") or ""
     tmdb_id = ids.get("tmdb") or ""
-    simkl_id = ids.get("simkl") or ""
+    # SIMKL's /search/tv and /search/movie responses key this "simkl_id", not "simkl"
+    # like /tv/{id}, /movies/{id}, and the sync/all-items endpoints do - a genuine
+    # inconsistency in SIMKL's own API. Check both so search-originated items still
+    # get a working simkl_id (needed for the season/movie screens' context menus).
+    simkl_id = ids.get("simkl_id") or ids.get("simkl") or ""
     poster_path = chosen.get("poster") or ""
 
     url = build_url(
@@ -1022,7 +1191,15 @@ def show_seasons(params):
             next=next_ep, season_num=sn,
             simkl_poster=simkl_poster, simkl_id=simkl_id,
         )
-        add_item(label, url=url, art=art, is_folder=True)
+
+        ctx = None
+        if simkl_id:
+            ctx = [
+                ("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='show')})"),
+                ("Add to Watchlist", f"RunPlugin({build_url(action='recommended_watchlist', kind='show', simkl_id=simkl_id, title=title)})"),
+            ]
+
+        add_item(label, url=url, art=art, is_folder=True, context_menu=ctx)
 
     end_dir()
 
@@ -1333,7 +1510,8 @@ def show_movie_item(params):
     ctx.append(("Play via Homelander", f"RunPlugin({hl_url})"))
     ctx.append(("Play via IPTV", f"RunPlugin({build_url(action='play_iptv_movie', title=title)})"))
     if simkl_id:
-        ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id)})"))
+        ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='movie')})"))
+        ctx.append(("Add to Watchlist", f"RunPlugin({build_url(action='recommended_watchlist', kind='movie', simkl_id=simkl_id, title=title)})"))
 
     info = {"title": title}
     if year:
@@ -1698,13 +1876,14 @@ def play_local_movie(params):
 def play_trailer(params):
     title     = params.get("title", "")
     simkl_id  = params.get("simkl_id", "")
+    kind      = params.get("kind", "show")
     addon     = xbmcaddon.Addon()
     youtube_id = None
 
     if simkl_id:
         try:
             api = SimklApi(addon)
-            details = api.get_show_details_full(int(simkl_id))
+            details = api.get_movie_details_full(int(simkl_id)) if kind == "movie" else api.get_show_details_full(int(simkl_id))
             # SIMKL extended=full returns trailer as a bare YouTube video ID string
             youtube_id = details.get("trailer") or details.get("youtube")
             if not youtube_id:
@@ -1717,7 +1896,10 @@ def play_trailer(params):
 
     if youtube_id:
         xbmc.log(f"[WhatsOnStreamer] Playing trailer youtube_id={youtube_id} for {title}", xbmc.LOGINFO)
-        xbmc.executebuiltin(f'RunPlugin("plugin://plugin.video.youtube/play/?video_id={youtube_id}")')
+        # PlayMedia, not RunPlugin - RunPlugin invokes the target addon with no
+        # resolve handle (Handle: -1 in kodi.log), which crashes some versions of
+        # plugin.video.youtube before they ever get to resolve the stream.
+        xbmc.executebuiltin(f'PlayMedia("plugin://plugin.video.youtube/play/?video_id={youtube_id}")')
     else:
         xbmc.log(f"[WhatsOnStreamer] No SIMKL trailer for {title!r}, falling back to YouTube search", xbmc.LOGINFO)
         q = urllib.parse.quote(f"{title} official trailer")
@@ -1813,6 +1995,16 @@ def router():
         show_upcoming()
     elif action == "movies":
         show_movies()
+    elif action == "recommended_menu":
+        show_recommended_menu()
+    elif action == "recommended_shows":
+        show_recommended_shows()
+    elif action == "recommended_movies":
+        show_recommended_movies()
+    elif action == "recommended_remove":
+        recommended_remove(params); xbmc.executebuiltin('Container.Refresh')
+    elif action == "recommended_watchlist":
+        recommended_watchlist(params); xbmc.executebuiltin('Container.Refresh')
     elif action == "search_menu":
         show_search_menu()
     elif action == "search_series":

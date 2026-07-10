@@ -9,6 +9,7 @@ from resources.lib.cache import DiskCache
 API_BASE = "https://api.simkl.com"
 
 _cache_show = DiskCache("simkl_show", ttl=7 * 86400)  # 7 days — trailer/ids rarely change
+_cache_movie = DiskCache("simkl_movie", ttl=7 * 86400)  # 7 days — mirrors _cache_show
 
 class SimklApi:
     def __init__(self, addon):
@@ -52,6 +53,18 @@ class SimklApi:
         with urllib.request.urlopen(req, timeout=20) as r:
             data = json.loads(r.read().decode("utf-8"))
             return data
+
+    def _post(self, path, body, auth=False):
+        if not self.client_id:
+            raise RuntimeError("Missing SIMKL Client ID in add-on settings.")
+        if auth and not self.token:
+            raise RuntimeError("Missing SIMKL access token. Authorize first.")
+
+        url = API_BASE + path
+        payload = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers=self._headers(auth=auth), method="POST")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read().decode("utf-8"))
     def get_show_details_full(self, simkl_id: int):
         key = str(simkl_id)
         cached = _cache_show.get(key)
@@ -64,6 +77,19 @@ class SimklApi:
     def get_show_details_if_cached(self, simkl_id: int):
         """Returns cached show details without a network call, or None."""
         return _cache_show.get(str(simkl_id))
+
+    def get_movie_details_full(self, simkl_id: int):
+        key = str(simkl_id)
+        cached = _cache_movie.get(key)
+        if cached is not None:
+            return cached
+        data = self._get(f"/movies/{simkl_id}", params={"extended": "full"}, auth=False)
+        _cache_movie.set(key, data)
+        return data
+
+    def get_movie_details_if_cached(self, simkl_id: int):
+        """Returns cached movie details without a network call, or None."""
+        return _cache_movie.get(str(simkl_id))
 
     def search_shows(self, query: str):
         """GET /search/tv — not cached (user-initiated search). Returns a list of results."""
@@ -120,9 +146,39 @@ class SimklApi:
     def get_watching_shows(self):
         return self._get("/sync/all-items/shows/watching", params={"extended": "full"}, auth=True)
 
+    def get_completed_shows(self):
+        return self._get("/sync/all-items/shows/completed", params={"extended": "full"}, auth=True)
+
     def get_plan_movies(self):
         """
         Fetch movies from the user's SIMKL Plan to Watch list.
         """
         data = self._get("/sync/all-items/movies/plan", auth=True)
         return data
+
+    def get_completed_movies(self):
+        return self._get("/sync/all-items/movies/completed", auth=True)
+
+    def get_dropped_shows(self):
+        return self._get("/sync/all-items/shows/dropped", auth=True)
+
+    def get_dropped_movies(self):
+        return self._get("/sync/all-items/movies/dropped", auth=True)
+
+    def _set_list_status(self, kind: str, simkl_id: int, status: str) -> dict:
+        """POST /sync/add-to-list — moves a show or movie into the given watchlist
+        status. `kind` is 'show' or 'movie'; `status` is one of watching/plantowatch/
+        hold/completed/dropped (movies only support plantowatch/completed/dropped)."""
+        key = "shows" if kind == "show" else "movies"
+        body = {key: [{"to": status, "ids": {"simkl": int(simkl_id)}}]}
+        return self._post("/sync/add-to-list", body, auth=True)
+
+    def add_to_dropped(self, kind: str, simkl_id: int) -> dict:
+        return self._set_list_status(kind, simkl_id, "dropped")
+
+    def add_to_watchlist(self, kind: str, simkl_id: int) -> dict:
+        """Shows go to 'watching' (actively tracking); movies can't use that status
+        (SIMKL only allows plantowatch/completed/dropped for movies), so they go to
+        'plantowatch' - SIMKL's literal watchlist status."""
+        status = "watching" if kind == "show" else "plantowatch"
+        return self._set_list_status(kind, simkl_id, status)
