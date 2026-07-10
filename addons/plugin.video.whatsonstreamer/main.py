@@ -267,7 +267,6 @@ def show_whatsupnext_menu():
     add_folder("Movies", "movies", icon=f"{MEDIA_PATH}/movies.png")
     add_folder("AllDebrid", "alldebrid_menu", icon=f"{MEDIA_PATH}/alldebrid.png")
     add_folder("Search", "search_menu", icon=f"{MEDIA_PATH}/search.png")
-    add_folder("Settings / Help", "help", icon=f"{MEDIA_PATH}/help.png")
     end_dir()
 
 
@@ -278,6 +277,7 @@ def show_tools_menu():
     add_item("Live TV: Run auto-update now", url=build_url(action="svc_update"))
     add_item("Live TV: Test connection", url=build_url(action="livetv_test"))
     add_item("Live TV: Test local files", url=build_url(action="livetv_test_local"))
+    add_item("WhatsUpNext: Warm episode cache now", url=build_url(action="svc_warm_whatsupnext"))
     add_item("Import settings from WhatsOnNow / WhatsUpNext", url=build_url(action="settings_import"))
     add_item("Reset settings to defaults", url=build_url(action="settings_reset"))
     add_item("Open Settings", url=build_url(action="settings"))
@@ -1746,6 +1746,8 @@ def router():
         settings_reset.confirm_and_reset()
     elif action == "svc_update":
         xbmc.executebuiltin('RunScript(special://home/addons/plugin.video.whatsonstreamer/service.py,manual)')
+    elif action == "svc_warm_whatsupnext":
+        xbmc.executebuiltin('RunScript(special://home/addons/plugin.video.whatsonstreamer/service.py,warm_whatsupnext)')
     elif action == "livetv_root":
         livetv.list_root()
     elif action == "livetv_build_info":

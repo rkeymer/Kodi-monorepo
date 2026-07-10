@@ -126,6 +126,8 @@
     <setting id="livetv_include_regex" type="text" label="Include regex (optional)" default="" />
     <setting id="livetv_exclude_regex" type="text" label="Exclude regex (optional)" default="" />
 
+    <setting id="whatsupnext_cache_warm_hours" type="number" label="Refresh New Episodes/Upcoming/Movies cache every N hours (0 = off)" default="12" />
+
     <setting id="livetv_use_local_cache_files" type="bool" label="DEBUG: Use local cache files instead of web downloads" default="false" />
     <setting id="livetv_local_cache_base_path" type="text" label="DEBUG: Local cache folder" default="" />
     <setting id="livetv_local_cache_playlist_file" type="text" label="DEBUG: Playlist cache filename" default="playlist-online.m3u" />

@@ -230,6 +230,118 @@ def run_manual() -> bool:
         return False
 
 
+def _warm_watching_shows(simkl, tmdb) -> int:
+    """TmdbApi.tv_details() per watched show - what New Episodes/Upcoming loop
+    on a cold cache. Mirrors main.py's show_new_episodes()/show_upcoming()."""
+    try:
+        data = simkl.get_watching_shows()
+    except Exception as e:
+        log.warn('WhatsUpNext cache warm: SIMKL shows fetch failed: %s' % repr(e))
+        return 0
+
+    shows = data.get('shows', []) if isinstance(data, dict) else []
+    warmed = 0
+    for it in shows:
+        tmdb_id = ((it.get('show') or {}).get('ids') or {}).get('tmdb')
+        if not tmdb_id:
+            continue
+        try:
+            tmdb.tv_details(int(tmdb_id))
+            warmed += 1
+        except Exception as e:
+            log.warn('WhatsUpNext cache warm: TMDB tv_details failed for %s: %s' % (tmdb_id, repr(e)))
+    return warmed
+
+
+def _warm_plan_movies(simkl, tmdb) -> int:
+    """TmdbApi.movie_details() per SIMKL Plan-to-Watch movie - what
+    show_movies() loops on a cold cache. Deliberately skips replicating
+    show_movies()'s status/shape defensive parsing in full (risks drift) -
+    just normalizes the common {movies|items|data: [...]}/bare-list shapes
+    and warms every item with a tmdb id; harmless if that's a superset of
+    what show_movies() ultimately displays."""
+    try:
+        data = simkl.get_plan_movies()
+    except Exception as e:
+        log.warn('WhatsUpNext cache warm: SIMKL movies fetch failed: %s' % repr(e))
+        return 0
+
+    movies = []
+    if isinstance(data, dict):
+        for key in ('movies', 'items', 'data'):
+            if isinstance(data.get(key), list):
+                movies = data[key]
+                break
+    elif isinstance(data, list):
+        movies = data
+
+    warmed = 0
+    for it in movies:
+        if not isinstance(it, dict):
+            continue
+        movie = it.get('movie') or it.get('film') or it
+        if not isinstance(movie, dict):
+            continue
+        tmdb_id = (movie.get('ids') or {}).get('tmdb')
+        if not tmdb_id:
+            continue
+        try:
+            tmdb.movie_details(int(tmdb_id))
+            warmed += 1
+        except Exception as e:
+            log.warn('WhatsUpNext cache warm: TMDB movie_details failed for %s: %s' % (tmdb_id, repr(e)))
+    return warmed
+
+
+def _warm_whatsupnext_cache(force: bool = False):
+    """Pre-fetches TmdbApi.tv_details()/movie_details() for every currently
+    watching show and planned movie, so New Episodes/Upcoming Episodes/Movies
+    never hit a cold TMDB cache in the foreground (that per-item synchronous
+    lookup loop, done inline in main.py on a cold cache, is what makes first
+    open slow). Both TMDB calls already check their own disk cache before
+    making a network call, so running this often costs nothing once warm.
+
+    force=True (the manual Tools-menu trigger) mirrors run_manual()/_do_update()
+    above: skips both the "disabled" and the last-run gates entirely, same as
+    that button ignores livetv_auto_update_enabled.
+    """
+    if not force:
+        interval_h = _get_int('whatsupnext_cache_warm_hours', 12)
+        if interval_h <= 0:
+            return
+        st = _load_state()
+        now_ts = int(time.time())
+        last_ts = int(st.get('last_whatsupnext_warm', 0) or 0)
+        if last_ts > 0 and (now_ts - last_ts) < interval_h * 3600:
+            return
+
+    from resources.lib.simkl_api import SimklApi
+    from resources.lib.tmdb_api import TmdbApi
+
+    simkl = SimklApi(ADDON)
+    if not simkl.is_authorized():
+        if force:
+            xbmc.executebuiltin('Notification(WhatsOnStreamer,SIMKL not authorized - nothing to warm,4000,warning)')
+        return
+
+    tmdb = TmdbApi(ADDON)
+    if not tmdb.is_configured():
+        if force:
+            xbmc.executebuiltin('Notification(WhatsOnStreamer,No TMDB API key set - nothing to warm,4000,warning)')
+        return
+
+    warmed_shows = _warm_watching_shows(simkl, tmdb)
+    warmed_movies = _warm_plan_movies(simkl, tmdb)
+
+    st = _load_state()
+    st['last_whatsupnext_warm'] = int(time.time())
+    _save_state(st)
+
+    log.info('WhatsUpNext cache warm: refreshed %d shows, %d movies' % (warmed_shows, warmed_movies))
+    if force:
+        xbmc.executebuiltin('Notification(WhatsOnStreamer,Warmed %d shows / %d movies,4000,info)' % (warmed_shows, warmed_movies))
+
+
 def _with_auto_flag(plugin_url: str) -> str:
     """Marks a plugin:// re-invocation as background-triggered (watchdog restart,
     scheduled switch) rather than a direct user click, so livetv.py's
@@ -409,6 +521,11 @@ def run_loop():
             log.warn('Service loop error: %s' % repr(e))
 
         try:
+            _warm_whatsupnext_cache()
+        except Exception as e:
+            log.warn('WhatsUpNext cache warm error: %s' % repr(e))
+
+        try:
             _check_scheduled_events(monitor)
         except Exception as e:
             log.warn('Scheduled-events check error: %s' % repr(e))
@@ -420,8 +537,11 @@ def run_loop():
 
 
 if __name__ == '__main__':
-    # If invoked via RunScript(...,manual) run once and exit
-    if len(sys.argv) > 1 and any(str(a).lower() == 'manual' for a in sys.argv[1:]):
+    # If invoked via RunScript(...,manual) or (...,warm_whatsupnext) run once and exit
+    _args_lower = [str(a).lower() for a in sys.argv[1:]] if len(sys.argv) > 1 else []
+    if 'manual' in _args_lower:
         run_manual()
+    elif 'warm_whatsupnext' in _args_lower:
+        _warm_whatsupnext_cache(force=True)
     else:
         run_loop()

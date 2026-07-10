@@ -5,8 +5,14 @@ import time
 try:
     import xbmcaddon
     import xbmcvfs
+    # Explicit id, not the parameterless xbmcaddon.Addon() - that relies on Kodi
+    # auto-inferring the running addon, which works for plugin:// invocations and
+    # the long-running service loop, but throws "No valid addon id could be
+    # obtained" when this module is imported from a one-shot
+    # RunScript(service.py,<args>) invocation of an arbitrary file path (exactly
+    # how the WhatsUpNext manual cache-warm Tools action runs service.py).
     def _cache_dir():
-        profile = xbmcvfs.translatePath(xbmcaddon.Addon().getAddonInfo("profile"))
+        profile = xbmcvfs.translatePath(xbmcaddon.Addon('plugin.video.whatsonstreamer').getAddonInfo("profile"))
         return os.path.join(profile, "cache")
 except ImportError:
     def _cache_dir():
