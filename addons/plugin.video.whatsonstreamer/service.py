@@ -230,8 +230,20 @@ def run_manual() -> bool:
         return False
 
 
+def _with_auto_flag(plugin_url: str) -> str:
+    """Marks a plugin:// re-invocation as background-triggered (watchdog restart,
+    scheduled switch) rather than a direct user click, so livetv.py's
+    _resolve_channel_playback skips the interactive failover picker - a blocking
+    select dialog has no one to answer it when this fires unattended."""
+    parts = urllib.parse.urlsplit(plugin_url)
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True) if k != 'auto']
+    q.append(('auto', '1'))
+    new_query = urllib.parse.urlencode(q)
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+
+
 def _play_channel_url(url: str, name: str):
-    plugin_url = 'plugin://%s/?action=livetv_play_url&u=%s&n=%s' % (
+    plugin_url = 'plugin://%s/?action=livetv_play_url&u=%s&n=%s&auto=1' % (
         ADDON_ID, urllib.parse.quote(url or '', safe=''), urllib.parse.quote(name or '', safe=''))
     xbmc.executebuiltin('PlayMedia(%s)' % plugin_url)
 
@@ -353,7 +365,7 @@ class LiveTVWatchdog(xbmc.Player):
 
     def _restart(self, f: str):
         xbmc.sleep(RESTART_DELAY_SECONDS * 1000)
-        xbmc.executebuiltin('PlayMedia(%s)' % f)
+        xbmc.executebuiltin('PlayMedia(%s)' % _with_auto_flag(f))
 
 
 def run_loop():

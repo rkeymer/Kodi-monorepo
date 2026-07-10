@@ -31,14 +31,12 @@ class IptvApi:
             self._username = addon.getSettingString("iptv_username").strip()
             self._password = addon.getSettingString("iptv_password").strip()
             self._series_enabled = addon.getSettingBool("iptv_series_enabled")
-            self._vod_enabled = addon.getSettingBool("iptv_vod_enabled")
             ttl_hours = addon.getSettingInt("iptv_catalog_ttl_hours") or 24
         except Exception:
             self._base_url = ""
             self._username = ""
             self._password = ""
             self._series_enabled = True
-            self._vod_enabled = True
             ttl_hours = 24
 
         self._cache_series = DiskCache("iptv_series", ttl=max(1, ttl_hours) * 3600)
@@ -49,7 +47,7 @@ class IptvApi:
         return bool(self._series_enabled and self._base_url and self._username and self._password)
 
     def is_vod_configured(self):
-        return bool(self._vod_enabled and self._base_url and self._username and self._password)
+        return bool(self._base_url and self._username and self._password)
 
     # ------------------------------------------------------------------
     def _player_api(self, action, **params):

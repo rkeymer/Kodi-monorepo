@@ -60,10 +60,6 @@
              label="IPTV password"
              default=""
              option="hidden"/>
-    <setting id="iptv_vod_enabled"
-             type="bool"
-             label="Enable IPTV movie (VOD) lookup"
-             default="true"/>
     <setting id="iptv_series_enabled"
              type="bool"
              label="Enable IPTV series lookup"
@@ -75,19 +71,11 @@
   </category>
 
   <category label="Live TV - Playlist &amp; EPG">
-    <setting id="livetv_playlist_source" type="enum" label="Playlist source" values="Download (URL)|Local file" default="0" />
     <setting id="livetv_m3u_path" type="text" label="M3U path (uses the IPTV credentials above)" default="/get.php" />
     <setting id="livetv_m3u_type" type="text" label="Playlist type (m3u or m3u_plus)" default="m3u_plus" />
     <setting id="livetv_output" type="text" label="Output format (ts or m3u8)" default="ts" />
-    <setting id="livetv_playlist_timeout" type="number" label="Playlist fetch timeout (seconds)" default="600" />
-    <setting id="livetv_playlist_retries" type="number" label="Playlist fetch retries" default="3" />
     <setting id="livetv_local_playlist_path" type="text" label="Local playlist file (.m3u)" default="special://profile/addon_data/plugin.video.whatsonstreamer/playlist.m3u" />
-    <setting id="livetv_epg_enabled" type="bool" label="Enable EPG" default="true" />
-    <setting id="livetv_epg_source" type="enum" label="EPG source" values="Download (URL)|Local file" default="0" />
     <setting id="livetv_epg_path" type="text" label="EPG path (uses the IPTV credentials above)" default="/xmltv.php" />
-    <setting id="livetv_epg_timeout" type="number" label="EPG fetch timeout (seconds)" default="600" />
-    <setting id="livetv_epg_ttl" type="number" label="EPG cache TTL (minutes)" default="180" />
-    <setting id="livetv_epg_use_conditional_get" type="bool" label="Use conditional GET (ETag/Last-Modified)" default="true" />
     <setting id="livetv_local_epg_path" type="text" label="Local EPG file (.xml)" default="special://profile/addon_data/plugin.video.whatsonstreamer/epg.xml" />
   </category>
 
@@ -99,13 +87,10 @@
   </category>
 
   <category label="Live TV - Channel Filtering">
-    <setting id="livetv_drop_vod" type="bool" label="Drop VOD / series / movies" default="true" />
     <setting id="livetv_include_groups" type="text" label="Include groups (comma-separated)" default="" />
     <setting id="livetv_exclude_groups" type="text" label="Exclude groups (comma-separated)" default="Adult,XXX" />
     <setting id="livetv_include_keywords" type="text" label="Include keywords (comma-separated)" default="" />
     <setting id="livetv_exclude_keywords" type="text" label="Exclude keywords (comma-separated)" default="" />
-    <setting id="livetv_include_regex" type="text" label="Include regex (optional)" default="" />
-    <setting id="livetv_exclude_regex" type="text" label="Exclude regex (optional)" default="" />
   </category>
 
   <category label="Live TV - Auto-Update">
@@ -124,6 +109,23 @@
 
   <category label="Advanced">
     <setting id="debug_logging" type="bool" label="Debug logging (all modules: SIMKL, TMDB, Live TV)" default="false" />
+
+    <setting id="livetv_epg_enabled" type="bool" label="Enable EPG" default="true" />
+
+    <!-- Not needed while the background auto-update service keeps the local
+         playlist/EPG files fresh - only matters if you want on-demand browsing
+         to fetch live from the provider instead of reading those files. -->
+    <setting id="livetv_playlist_source" type="enum" label="Playlist source" values="Download (URL)|Local file" default="0" />
+    <setting id="livetv_epg_source" type="enum" label="EPG source" values="Download (URL)|Local file" default="0" />
+    <setting id="livetv_playlist_timeout" type="number" label="Playlist fetch timeout (seconds)" default="600" />
+    <setting id="livetv_playlist_retries" type="number" label="Playlist fetch retries" default="3" />
+    <setting id="livetv_epg_timeout" type="number" label="EPG fetch timeout (seconds)" default="600" />
+    <setting id="livetv_epg_ttl" type="number" label="EPG cache TTL (minutes)" default="180" />
+    <setting id="livetv_epg_use_conditional_get" type="bool" label="Use conditional GET (ETag/Last-Modified)" default="true" />
+
+    <setting id="livetv_include_regex" type="text" label="Include regex (optional)" default="" />
+    <setting id="livetv_exclude_regex" type="text" label="Exclude regex (optional)" default="" />
+
     <setting id="livetv_use_local_cache_files" type="bool" label="DEBUG: Use local cache files instead of web downloads" default="false" />
     <setting id="livetv_local_cache_base_path" type="text" label="DEBUG: Local cache folder" default="" />
     <setting id="livetv_local_cache_playlist_file" type="text" label="DEBUG: Playlist cache filename" default="playlist-online.m3u" />

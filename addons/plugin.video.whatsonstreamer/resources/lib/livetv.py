@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 import urllib.parse
 
@@ -19,6 +20,7 @@ from resources.lib.iptv_http import download_to_file, check_stream_ok, UA
 from resources.lib.xmltv import extract_now_next_from_file, extract_schedule_from_file, search_programmes_from_file
 from resources.lib.livetv_migrate import migrate_from_whatsonnow_if_needed
 from resources.lib import scheduler
+from resources.lib import failover
 
 ADDON = xbmcaddon.Addon()
 ADDON_PATH = ADDON.getAddonInfo('path')
@@ -291,7 +293,11 @@ def load_playlist_index(force: bool = False) -> dict:
         except Exception:
             pass
 
-    drop_vod = (get_setting('livetv_drop_vod', 'true').lower() == 'true')
+    # Movies/series get their own dedicated flow (SIMKL/TMDB -> IPTV VOD lookup
+    # -> AllDebrid/Local Media, under WhatsUpNext), so VOD entries bundled into
+    # the provider's M3U are always dropped from Live TV - never a reason to
+    # want raw stream entries with no metadata cluttering the channel list.
+    drop_vod = True
     filter_fn = _build_filter()
 
     playlist_source = get_setting('livetv_playlist_source', '0')
@@ -408,9 +414,10 @@ def load_epg_now_next(force: bool, playlist_index: dict) -> dict:
 
     use_conditional = (get_setting('livetv_epg_use_conditional_get', 'true').lower() == 'true')
     dest = local_epg_path or 'special://profile/addon_data/plugin.video.whatsonstreamer/epg.xml'
+    epg_timeout = get_setting_int('livetv_epg_timeout', 90)
 
     try:
-        download_to_file(epg_url, dest, meta_path=EPG_META, use_conditional=use_conditional, timeout=90)
+        download_to_file(epg_url, dest, meta_path=EPG_META, use_conditional=use_conditional, timeout=epg_timeout)
     except Exception as e:
         log.warn(f"EPG URL download failed: {repr(e)}")
         if local_epg_path and xbmcvfs.exists(local_epg_path):
@@ -760,6 +767,24 @@ def list_coming_up():
     end_dir()
 
 
+_SEARCH_SEP_RE = re.compile(r'[\s\-]+')
+
+
+def _search_key(s: str) -> str:
+    """Whitespace/hyphen-insensitive form for channel-name search matching.
+
+    Real-world provider naming is inconsistent for the same brand - e.g. the
+    playlist has both "DSTV| SUPER SPORT RUGBY HD" and "ZA| SUPERSPORT RUGBY
+    FHD" for what's otherwise the same channel lineup, and "BEIN SPORTS" vs
+    "BEIN-SPORTS" - so a plain substring search for "supersport" silently
+    misses half of them. Collapsing whitespace/hyphens (not full punctuation
+    or word-level fuzzing) keeps this a strict substring-containment check,
+    just insensitive to separator placement - deliberately narrow to avoid
+    pulling in unrelated channels.
+    """
+    return _SEARCH_SEP_RE.sub('', (s or '').lower())
+
+
 def do_search():
     """Prompt for a query, persist it, then navigate to the dialog-free results view.
 
@@ -794,11 +819,11 @@ def list_search_results():
     channels = idx.get('channels', [])
 
     max_results = get_setting_int('livetv_max_search_results', 200)
-    ql = q.lower()
+    ql = _search_key(q)
     hits = 0
 
     for i, ch in enumerate(channels):
-        if ql in (ch.get('name') or '').lower():
+        if ql in _search_key(ch.get('name') or ''):
             _add_channel_item(ch, index_i=i, epg_map=epg)
             hits += 1
             if hits >= max_results:
@@ -947,12 +972,65 @@ CHECK_TIMEOUT_SECONDS = 4
 RETRY_DELAY_MS = 2000
 
 
-def _resolve_channel_playback(url: str, name: str, plugin_url: str):
+def _failover_label(candidate: dict) -> str:
+    ch = candidate['channel']
+    name = ch.get('name') or 'Channel'
+    reason = candidate['reason']
+    if reason == 'backup':
+        return f"{name} (Backup feed)"
+    if reason == 'epg':
+        return f"{name} — {candidate.get('match_title') or ''} (EPG match)"
+    group = ch.get('group') or ''
+    return f"{name} (same name, {group})" if group else f"{name} (same name)"
+
+
+def _prompt_failover(url: str, name: str, ch: dict):
+    """Shown only on a direct, attended user action (see allow_failover in
+    _resolve_channel_playback) - blocks on user input, which would be
+    inappropriate for the watchdog/scheduler's unattended background retries.
+    """
+    idx = load_playlist_index(force=False)
+    channels = idx.get('channels', [])
+
+    failed_tvg_id = (ch.get('tvg_id') or '').strip() if ch else ''
+    if not failed_tvg_id:
+        hit = _index_by_url(channels).get(url)
+        if hit:
+            failed_tvg_id = (hit[1].get('tvg_id') or '').strip()
+
+    epg_map = load_epg_now_next(force=False, playlist_index=idx)
+    candidates = failover.find_failover_candidates(channels, epg_map, url, name, failed_tvg_id)
+    if not candidates:
+        return None
+
+    labels = [_failover_label(c) for c in candidates]
+    choice = xbmcgui.Dialog().select(f'"{name}" is unavailable — try another channel?', labels)
+    if choice is None or choice < 0:
+        return None
+
+    picked = candidates[choice]
+    p_ch = picked['channel']
+    p_url = p_ch.get('url') or ''
+    p_name = p_ch.get('name') or 'Channel'
+    p_plugin_url = build_url(action='livetv_play', i=str(picked['index']))
+    return p_url, p_name, p_plugin_url, channel_to_entry(p_ch)
+
+
+def _resolve_channel_playback(url: str, name: str, plugin_url: str, ch: dict = None, allow_failover: bool = True):
     ok = check_stream_ok(url, timeout=CHECK_TIMEOUT_SECONDS)
     if not ok:
         log.warn(f"Stream check failed for {name}, retrying once...")
         xbmc.sleep(RETRY_DELAY_MS)
         ok = check_stream_ok(url, timeout=CHECK_TIMEOUT_SECONDS)
+
+    if not ok and allow_failover:
+        candidate = _prompt_failover(url, name, ch)
+        if candidate:
+            c_url, c_name, c_plugin_url, c_entry = candidate
+            update_recent_from_entry(c_entry)
+            _resolve_channel_playback(c_url, c_name, c_plugin_url, ch=None, allow_failover=False)
+            return
+
     if not ok:
         log.warn(f"Stream still failing after retry for {name}")
         xbmc.executebuiltin(f'Notification(WhatsOnStreamer,{name} may be unavailable right now,4000,warning)')
@@ -986,7 +1064,7 @@ def _resolve_channel_playback(url: str, name: str, plugin_url: str):
     xbmcplugin.setResolvedUrl(HANDLE, True, li)
 
 
-def play_channel_by_index(i: str):
+def play_channel_by_index(i: str, auto: str = ''):
     idx = load_playlist_index(force=False)
     channels = idx.get('channels', [])
 
@@ -1007,10 +1085,10 @@ def play_channel_by_index(i: str):
 
     name = ch.get('name') or 'Live TV'
     plugin_url = build_url(action='livetv_play', i=str(ii))
-    _resolve_channel_playback(url, name, plugin_url)
+    _resolve_channel_playback(url, name, plugin_url, ch=ch, allow_failover=(auto != '1'))
 
 
-def play_channel_by_url(url: str, name: str = ''):
+def play_channel_by_url(url: str, name: str = '', auto: str = ''):
     url = url or ''
     if not url:
         _resolve_fail(); return
@@ -1019,7 +1097,7 @@ def play_channel_by_url(url: str, name: str = ''):
     update_recent_from_entry({'name': name, 'url': url, 'tvg_id': '', 'logo': '', 'group': ''})
 
     plugin_url = build_url(action='livetv_play_url', u=url, n=name)
-    _resolve_channel_playback(url, name, plugin_url)
+    _resolve_channel_playback(url, name, plugin_url, ch=None, allow_failover=(auto != '1'))
 
 
 def play_m3u(url: str = '', name: str = ''):

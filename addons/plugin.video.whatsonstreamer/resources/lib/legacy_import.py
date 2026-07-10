@@ -37,7 +37,6 @@ _WHATSONNOW_MAP = {
     'recent_max': 'livetv_recent_max',
     'on_now_pinned_recent': 'livetv_on_now_pinned_recent',
     'coming_up_hours': 'livetv_coming_up_hours',
-    'drop_vod': 'livetv_drop_vod',
     'include_groups': 'livetv_include_groups',
     'exclude_groups': 'livetv_exclude_groups',
     'include_keywords': 'livetv_include_keywords',

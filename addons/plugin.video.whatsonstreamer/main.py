@@ -254,9 +254,9 @@ def tmdb_next_episode_airdate(addon, tmdb_id):
 # --------------------------
 def show_root_menu():
     xbmcplugin.setPluginCategory(HANDLE, "WhatsOnStreamer")
-    add_folder("WhatsOnNow (Live TV)", "livetv_root", icon=f"{MEDIA_PATH}/on_now.png")
-    add_folder("WhatsUpNext (SIMKL)", "whatsupnext_root", icon=f"{MEDIA_PATH}/new.png")
-    add_folder("Tools", "tools_root", icon=f"{MEDIA_PATH}/tools_diagnostics.png")
+    add_folder("[B]WhatsOnNow (Live TV)[/B]", "livetv_root", icon=f"{MEDIA_PATH}/on_now.png")
+    add_folder("[B]WhatsUpNext (Series and Movies)[/B]", "whatsupnext_root", icon=f"{MEDIA_PATH}/new.png")
+    add_folder("[B]Tools[/B]", "tools_root", icon=f"{MEDIA_PATH}/tools_diagnostics.png")
     end_dir()
 
 
@@ -1794,9 +1794,9 @@ def router():
     elif action == "livetv_schedule_remove":
         livetv.do_schedule_remove(params.get('id', ''))
     elif action == "livetv_play":
-        livetv.play_channel_by_index(params.get('i', ''))
+        livetv.play_channel_by_index(params.get('i', ''), params.get('auto', ''))
     elif action == "livetv_play_url":
-        livetv.play_channel_by_url(params.get('u', ''), params.get('n', ''))
+        livetv.play_channel_by_url(params.get('u', ''), params.get('n', ''), params.get('auto', ''))
     elif action == "livetv_play_m3u":
         livetv.play_m3u(params.get('u', ''), params.get('n', ''))
     elif action == "livetv_refresh":
