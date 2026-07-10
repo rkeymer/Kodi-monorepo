@@ -328,8 +328,18 @@ def load_playlist_index(force: bool = False) -> dict:
         save_json(PLAYLIST_CACHE, index)
         return index
 
-    timeout_s = get_setting_int('livetv_playlist_timeout', 600)
-    retries = get_setting_int('livetv_playlist_retries', 3)
+    # livetv_playlist_timeout/retries (default 600s x 3) are tuned for the
+    # background auto-update service's full-catalog download in service.py,
+    # which never blocks any UI - up to 1800s worst case there is harmless.
+    # This function's URL branch runs synchronously in the foreground (e.g. a
+    # cold "Recent"/"On Now" open with no fresh 10-minute cache) - blocking the
+    # UI on that same multi-minute budget before ever trying the local-file
+    # fallback below is exactly what turned a slow/unresponsive provider into
+    # an apparent hang. Use a short, fixed interactive budget instead so a slow
+    # provider falls back to the local file (kept fresh by the background
+    # service) in seconds, not minutes.
+    timeout_s = 8
+    retries = 1
 
     if not base_url or not username or not password:
         xbmcgui.Dialog().ok(ADDON.getAddonInfo('name'), 'Please set the IPTV Base URL, Username, and Password in Settings.')
@@ -414,7 +424,12 @@ def load_epg_now_next(force: bool, playlist_index: dict) -> dict:
 
     use_conditional = (get_setting('livetv_epg_use_conditional_get', 'true').lower() == 'true')
     dest = local_epg_path or 'special://profile/addon_data/plugin.video.whatsonstreamer/epg.xml'
-    epg_timeout = get_setting_int('livetv_epg_timeout', 90)
+    # Same reasoning as load_playlist_index()'s URL branch: livetv_epg_timeout
+    # (default 600s) is shared with service.py's background auto-update job,
+    # which never blocks any UI. This on-demand foreground path shouldn't wait
+    # anywhere near that long for a multi-tens-of-MB EPG file before falling
+    # back to the local file below.
+    epg_timeout = 10
 
     try:
         download_to_file(epg_url, dest, meta_path=EPG_META, use_conditional=use_conditional, timeout=epg_timeout)

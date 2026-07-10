@@ -115,8 +115,8 @@
     <!-- Not needed while the background auto-update service keeps the local
          playlist/EPG files fresh - only matters if you want on-demand browsing
          to fetch live from the provider instead of reading those files. -->
-    <setting id="livetv_playlist_source" type="enum" label="Playlist source" values="Download (URL)|Local file" default="0" />
-    <setting id="livetv_epg_source" type="enum" label="EPG source" values="Download (URL)|Local file" default="0" />
+    <setting id="livetv_playlist_source" type="enum" label="Playlist source" values="Download (URL)|Local file" default="1" />
+    <setting id="livetv_epg_source" type="enum" label="EPG source" values="Download (URL)|Local file" default="1" />
     <setting id="livetv_playlist_timeout" type="number" label="Playlist fetch timeout (seconds)" default="600" />
     <setting id="livetv_playlist_retries" type="number" label="Playlist fetch retries" default="3" />
     <setting id="livetv_epg_timeout" type="number" label="EPG fetch timeout (seconds)" default="600" />

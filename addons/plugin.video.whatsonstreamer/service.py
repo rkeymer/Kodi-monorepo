@@ -43,6 +43,8 @@ RESTART_DELAY_SECONDS = 3
 HEALTHY_SECONDS = 60
 MAX_RESTART_ATTEMPTS = 3
 
+STALL_POSITION_EPSILON_SECONDS = 1.0
+
 PROFILE_DIR = xbmcvfs.translatePath(ADDON.getAddonInfo('profile'))
 CACHE_DIR = os.path.join(PROFILE_DIR, 'cache')
 
@@ -293,13 +295,14 @@ def _warm_plan_movies(simkl, tmdb) -> int:
     return warmed
 
 
-def _warm_recommendations(simkl) -> tuple:
+def _warm_recommendations(simkl, tmdb) -> tuple:
     """Builds and saves the "Recommended" shows/movies lists (resources/lib/recommendations.py)
     from the account's SIMKL watch history, so the Recommended screen is always a fast cache
-    read in the foreground rather than a ~150-item live sweep. Returns (num_shows, num_movies)."""
+    read in the foreground rather than a ~150-item live sweep. Returns (num_shows, num_movies).
+    `tmdb` is passed through so recommendations.build() can apply its English-only filter."""
     from resources.lib import recommendations
 
-    data = _safe_call(lambda: recommendations.build(simkl), 'Recommendations build')
+    data = _safe_call(lambda: recommendations.build(simkl, tmdb), 'Recommendations build')
     if not data:
         return (0, 0)
     recommendations.save(data)
@@ -353,9 +356,15 @@ def _warm_whatsupnext_cache(force: bool = False):
             xbmc.executebuiltin('Notification(WhatsOnStreamer,No TMDB API key set - nothing to warm,4000,warning)')
         return
 
+    if force:
+        # This can take 30-40s+ (recommendations.build() sweeps ~150 seed items on a
+        # cold cache) - without an upfront notification the manual Tools button looks
+        # unresponsive until the completion toast fires at the very end.
+        xbmc.executebuiltin('Notification(WhatsOnStreamer,Warming WhatsUpNext caches...,3000,info)')
+
     warmed_shows = _warm_watching_shows(simkl, tmdb)
     warmed_movies = _warm_plan_movies(simkl, tmdb)
-    rec_shows, rec_movies = _warm_recommendations(simkl)
+    rec_shows, rec_movies = _warm_recommendations(simkl, tmdb)
 
     st = _load_state()
     st['last_whatsupnext_warm'] = int(time.time())
@@ -427,14 +436,24 @@ def _check_scheduled_events(monitor):
 
 
 class LiveTVWatchdog(xbmc.Player):
-    """Detects a Live TV channel dropping mid-playback (stream stalls, Kodi
-    treats it as EOF and closes it - see service.py history for the incident
-    that motivated this) and automatically restarts the same channel.
+    """Detects a Live TV channel dropping mid-playback and automatically
+    restarts the same channel. Two independent detection paths, since a stream
+    can fail in two different ways:
+
+    1. Reactive - Kodi's player itself notices the stream ended/errored (stream
+       stalls and Kodi treats it as EOF and closes it - see service.py history
+       for the incident that motivated this) and fires onPlayBackEnded/
+       onPlayBackError.
+    2. Active - check_stall(), polled once per run_loop tick, catches a stream
+       that goes silently dead without Kodi's player ever noticing (connection
+       stops delivering data without a clean close, so neither callback above
+       ever fires - observed 2026-07-10, 40+ minutes frozen with zero events).
 
     Deliberately does NOT react to onPlayBackStopped - that fires when the
     user stops or switches channel on purpose, and must never trigger a
-    restart. Only onPlayBackEnded/onPlayBackError (an unexpected end while a
-    Live TV channel was being tracked) count as a drop.
+    restart. Only onPlayBackEnded/onPlayBackError/check_stall's own detection
+    (an unexpected end/freeze while a Live TV channel was being tracked) count
+    as a drop.
 
     Identifying "a Live TV channel is playing" can't rely on
     Player.getPlayingFile() alone - for resolved plugin content that reports
@@ -455,6 +474,7 @@ class LiveTVWatchdog(xbmc.Player):
         self._file = None
         self._started_at = 0
         self._fail_counts = {}
+        self._last_stall_check_pos = None
 
     def onAVStarted(self):
         try:
@@ -471,9 +491,11 @@ class LiveTVWatchdog(xbmc.Player):
             self._started_at = time.time()
         else:
             self._file = None
+        self._last_stall_check_pos = None
 
     def onPlayBackStopped(self):
         self._file = None
+        self._last_stall_check_pos = None
 
     def onPlayBackEnded(self):
         self._handle_drop()
@@ -504,6 +526,41 @@ class LiveTVWatchdog(xbmc.Player):
     def _restart(self, f: str):
         xbmc.sleep(RESTART_DELAY_SECONDS * 1000)
         xbmc.executebuiltin('PlayMedia(%s)' % _with_auto_flag(f))
+
+    def check_stall(self):
+        """Called once per run_loop tick (~60s). Catches a silently-stalled Live TV
+        stream that never fires onPlayBackEnded/onPlayBackError - Kodi's player can
+        sit on a frozen last frame indefinitely if the underlying connection stops
+        delivering data without a clean close, rather than treating it as EOF/error
+        (observed 2026-07-10: 40+ minutes of dead air, zero player-level events, on
+        a different addon's stream - but nothing in Kodi's player model makes this
+        addon's own streams immune to the same failure mode).
+
+        Detection: if playback position hasn't advanced since the last tick despite
+        the player still reporting "playing", the stream is frozen. Skips paused
+        playback (Player.Paused - a deliberate user pause also holds position, and
+        must never be mistaken for a stall). Reuses _handle_drop()'s existing
+        retry-limit/backoff so a stall-then-recover channel doesn't loop forever.
+        """
+        if not self._file:
+            self._last_stall_check_pos = None
+            return
+        try:
+            if not self.isPlaying() or xbmc.getCondVisibility('Player.Paused'):
+                self._last_stall_check_pos = None
+                return
+            pos = self.getTime()
+        except Exception:
+            self._last_stall_check_pos = None
+            return
+
+        if self._last_stall_check_pos is not None and abs(pos - self._last_stall_check_pos) < STALL_POSITION_EPSILON_SECONDS:
+            log.warn('Live TV watchdog: playback position frozen at %.1fs - treating as a stall' % pos)
+            self._last_stall_check_pos = None
+            self._handle_drop()
+            return
+
+        self._last_stall_check_pos = pos
 
 
 def run_loop():
@@ -545,6 +602,11 @@ def run_loop():
 
         except Exception as e:
             log.warn('Service loop error: %s' % repr(e))
+
+        try:
+            watchdog.check_stall()
+        except Exception as e:
+            log.warn('Live TV watchdog stall check error: %s' % repr(e))
 
         try:
             _warm_whatsupnext_cache()
