@@ -17,7 +17,12 @@ except ImportError:
 import xbmcaddon
 import xbmcvfs
 
-ADDON = xbmcaddon.Addon()
+# Explicit id, not the parameterless xbmcaddon.Addon() - this module is
+# imported transitively from service.py (playlist_fetch -> iptv_http), which
+# can run in contexts where Kodi has no addon invocation context to infer
+# from (e.g. the manual "force update" RunScript action) - see cache.py for
+# the same pattern.
+ADDON = xbmcaddon.Addon('plugin.video.whatsonstreamer')
 
 # Some providers reject unrecognised User-Agents (e.g. a generic VLC UA) with a
 # blanket 401 across every stream while an allowlisted player UA goes through
