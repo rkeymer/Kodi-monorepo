@@ -984,7 +984,7 @@ def _resolve_fail():
 
 
 CHECK_TIMEOUT_SECONDS = 4
-RETRY_DELAY_MS = 2000
+RETRY_DELAY_MS = 4000
 
 
 def _failover_label(candidate: dict) -> str:

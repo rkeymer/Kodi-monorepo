@@ -39,7 +39,7 @@ from resources.lib import scheduler
 SCHEDULE_COUNTDOWN_SECONDS = 15
 SCHEDULE_GRACE_SECONDS = 600
 
-RESTART_DELAY_SECONDS = 3
+RESTART_DELAY_SECONDS = 10
 HEALTHY_SECONDS = 60
 MAX_RESTART_ATTEMPTS = 3
 
@@ -521,10 +521,15 @@ class LiveTVWatchdog(xbmc.Player):
             return
 
         log.info('Live TV watchdog: unexpected drop (attempt %d/%d), restarting %s' % (count, MAX_RESTART_ATTEMPTS, f))
-        threading.Thread(target=self._restart, args=(f,), daemon=True).start()
+        threading.Thread(target=self._restart, args=(f, count), daemon=True).start()
 
-    def _restart(self, f: str):
-        xbmc.sleep(RESTART_DELAY_SECONDS * 1000)
+    def _restart(self, f: str, attempt: int):
+        # Escalating backoff, not a flat delay - some IPTV providers only allow one
+        # active connection per account and enforce a cooldown after a disconnect
+        # before accepting a new one. A fast flat retry can land inside that
+        # cooldown on every attempt, making a single transient drop look like a
+        # total outage.
+        xbmc.sleep(RESTART_DELAY_SECONDS * attempt * 1000)
         xbmc.executebuiltin('PlayMedia(%s)' % _with_auto_flag(f))
 
     def check_stall(self):
