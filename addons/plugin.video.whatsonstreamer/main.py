@@ -11,7 +11,7 @@ from resources.lib.tmdb_api import TmdbApi
 from resources.lib.alldebrid_api import AllDebridApi
 from resources.lib.local_media import LocalMediaApi
 from resources.lib.iptv_api import IptvApi
-from resources.lib.iptv_http import UA as IPTV_UA
+from resources.lib.iptv_http import get_ua as get_iptv_ua
 from resources.lib.ui import get_params, build_url, add_folder, add_item, end_dir
 from resources.lib import livetv
 from resources.lib import settings_reset
@@ -1771,7 +1771,7 @@ def play_iptv(params):
         return
 
     label = display or f"{title} S{season:02d}E{episode:02d}"
-    _ad_resolve_and_play(stream_url, label, user_agent=IPTV_UA)
+    _ad_resolve_and_play(stream_url, label, user_agent=get_iptv_ua())
 
 
 # --------------------------
@@ -1848,7 +1848,7 @@ def play_iptv_movie(params):
         return
 
     label = display or title
-    _ad_resolve_and_play(stream_url, label, user_agent=IPTV_UA)
+    _ad_resolve_and_play(stream_url, label, user_agent=get_iptv_ua())
 
 
 def play_local_movie(params):

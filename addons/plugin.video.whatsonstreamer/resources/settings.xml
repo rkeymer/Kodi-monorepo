@@ -123,6 +123,14 @@
     <setting id="livetv_epg_ttl" type="number" label="EPG cache TTL (minutes)" default="180" />
     <setting id="livetv_epg_use_conditional_get" type="bool" label="Use conditional GET (ETag/Last-Modified)" default="true" />
 
+    <!-- Sent as the User-Agent on every direct IPTV request (Live TV playback,
+         stream pre-check, VOD/series direct streams, EPG/playlist download).
+         Some providers reject unrecognised clients (e.g. a generic VLC UA)
+         with a 401 while allowlisted player UAs go through - if Live TV starts
+         returning blanket "unavailable" across every channel, this is the
+         first thing to check against another player app that still works. -->
+    <setting id="livetv_user_agent" type="text" label="IPTV User-Agent" default="IPTVSmartersPro" />
+
     <setting id="livetv_include_regex" type="text" label="Include regex (optional)" default="" />
     <setting id="livetv_exclude_regex" type="text" label="Exclude regex (optional)" default="" />
 

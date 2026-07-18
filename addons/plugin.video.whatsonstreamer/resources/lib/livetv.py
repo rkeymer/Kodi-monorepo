@@ -16,7 +16,7 @@ from resources.lib.filters import build_filter
 from resources.lib.livetv_cache import is_fresh, load_json, save_json, ensure_dir
 from resources.lib.playlist import build_m3u_url, build_epg_url
 from resources.lib.playlist_fetch import fetch_url, parse_and_index
-from resources.lib.iptv_http import download_to_file, check_stream_ok, UA
+from resources.lib.iptv_http import download_to_file, check_stream_ok, get_ua
 from resources.lib.xmltv import extract_now_next_from_file, extract_schedule_from_file, search_programmes_from_file
 from resources.lib.livetv_migrate import migrate_from_whatsonnow_if_needed
 from resources.lib import scheduler
@@ -1066,7 +1066,7 @@ def _resolve_channel_playback(url: str, name: str, plugin_url: str, ch: dict = N
     win.setProperty('WhatsOnStreamer.livetv.plugin_url', plugin_url)
     win.setProperty('WhatsOnStreamer.livetv.stream_url', url)
 
-    li = xbmcgui.ListItem(label=name, path=f"{url}|User-Agent={urllib.parse.quote(UA)}")
+    li = xbmcgui.ListItem(label=name, path=f"{url}|User-Agent={urllib.parse.quote(get_ua())}")
     # The browse label for this channel may be swapped to "Channel - EPG programme
     # title" (see _add_channel_item) so you can see what's on while scanning the
     # list. Without an explicit label/title here, Kodi's playing-item info falls

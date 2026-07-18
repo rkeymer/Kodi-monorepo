@@ -14,15 +14,26 @@ except ImportError:
     def _log(msg):
         print(f"[IPTV] {msg}")
 
+import xbmcaddon
 import xbmcvfs
 
-UA = 'VLC/3.0.20 LibVLC/3.0.20'
+ADDON = xbmcaddon.Addon()
+
+# Some providers reject unrecognised User-Agents (e.g. a generic VLC UA) with a
+# blanket 401 across every stream while an allowlisted player UA goes through
+# fine on the same account - see settings.xml's livetv_user_agent for detail.
+DEFAULT_UA = 'IPTVSmartersPro'
+
+
+def get_ua() -> str:
+    return ADDON.getSetting('livetv_user_agent') or DEFAULT_UA
+
 
 DEFAULT_BACKOFF_SECONDS = 2
 
 
 def fetch_url(url: str, timeout: int = 60, retries: int = 3) -> bytes:
-    headers = {'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'gzip', 'Connection': 'close'}
+    headers = {'User-Agent': get_ua(), 'Accept': '*/*', 'Accept-Encoding': 'gzip', 'Connection': 'close'}
     last_err = None
     for attempt in range(1, retries + 1):
         try:
@@ -60,7 +71,7 @@ def check_stream_ok(url: str, timeout: int = 4) -> bool:
     back, without reading the body — it's a live TV stream, so reading it would
     block/download indefinitely rather than complete.
     """
-    headers = {'User-Agent': UA, 'Accept': '*/*'}
+    headers = {'User-Agent': get_ua(), 'Accept': '*/*'}
     req = urllib.request.Request(url, headers=headers)
     try:
         resp = urllib.request.urlopen(req, timeout=timeout)
@@ -111,7 +122,7 @@ def download_to_file(url: str, dest_path: str, meta_path: str = None, use_condit
     Used for the EPG (XMLTV) download, which can be large — avoids re-downloading
     unchanged data on every refresh.
     """
-    headers = {'User-Agent': UA, 'Accept-Encoding': 'gzip'}
+    headers = {'User-Agent': get_ua(), 'Accept-Encoding': 'gzip'}
     meta = _read_meta(meta_path) if (meta_path and use_conditional) else {}
     if meta.get('etag'):
         headers['If-None-Match'] = meta['etag']
