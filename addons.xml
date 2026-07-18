@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<addons>
+<addon
+    id="plugin.video.simkl.watching"
+    name="WhatsUpNext"
+    version="0.4.3"
+    provider-name="Personal">
+
+    <requires>
+        <import addon="xbmc.python" version="3.0.0"/>
+        <import addon="service.homelander.packfix" version="1.0.0"/>
+    </requires>
+
+    <extension
+        point="xbmc.python.pluginsource"
+        library="main.py">
+        <provides>video</provides>
+    </extension>
+
+    <extension point="xbmc.addon.metadata">
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
+        <summary>See what’s up next from your SIMKL Watching list</summary>
+        <description>
+WhatsUpNext shows:
+- New aired episodes you haven’t watched yet
+- Upcoming episodes (with air dates when TMDB is enabled)
+        </description>
+        <platform>all</platform>
+    </extension>
+
+</addon>
+<addon id="plugin.video.whatsonnow" name="WhatsOnNow" version="1.1.3" provider-name="Richard Keymer">
+  <requires>
+    <import addon="xbmc.python" version="3.0.0"/>
+  </requires>
+  <extension point="xbmc.python.pluginsource" library="main.py">
+    <provides>video</provides>
+  </extension>
+  <extension point="xbmc.service" library="service.py" start="startup" />
+  <extension point="xbmc.addon.metadata">
+    <assets>
+      <icon>icon.png</icon>
+    </assets>
+    <summary lang="en_GB">Live TV browser with local caching, favourites, recents, On Now and Coming Up</summary>
+    <description lang="en_GB">WhatsOnNow: local playlist/EPG support with auto-fallback, VOD filtering, paging, favourites, recently watched, and Coming Up schedule for pinned recents.</description>
+    <platform>all</platform>
+    <license>GPL-2.0-or-later</license>
+  </extension>
+</addon>
+<addon
+    id="plugin.video.whatsonstreamer"
+    name="WhatsOnStreamer"
+    version="0.2.41"
+    provider-name="Personal">
+
+    <requires>
+        <import addon="xbmc.python" version="3.0.0"/>
+        <import addon="service.homelander.packfix" version="1.0.0"/>
+    </requires>
+
+    <extension
+        point="xbmc.python.pluginsource"
+        library="main.py">
+        <provides>video</provides>
+    </extension>
+
+    <extension point="xbmc.service" library="service.py" start="startup" />
+
+    <extension point="xbmc.addon.metadata">
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
+        <summary>WhatsOnNow live TV browsing and WhatsUpNext SIMKL watching list, in one add-on</summary>
+        <description>
+WhatsOnStreamer shows:
+- WhatsOnNow: Live TV (On Now, Coming Up, Favourites, Groups, All Channels, EPG)
+- WhatsUpNext: New aired episodes, Upcoming episodes, Movies from your SIMKL Watching list
+- Play via local file, AllDebrid, Homelander, or an IPTV VOD/series/live provider
+        </description>
+        <platform>all</platform>
+    </extension>
+
+</addon>
+<addon id="repository.keymer" name="Keymer Kodi Repo" provider-name="rkeymer" version="1.0.0">
+  <extension point="xbmc.addon.repository" name="Keymer Kodi Repo">
+    <dir>
+      <info compressed="false">https://rkeymer.github.io/Kodi-monorepo/addons.xml</info>
+      <checksum>https://rkeymer.github.io/Kodi-monorepo/addons.xml.md5</checksum>
+      <datadir zip="true">https://rkeymer.github.io/Kodi-monorepo/</datadir>
+    </dir>
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="en">Richard Keymer's personal Kodi addon repository</summary>
+    <platform>all</platform>
+  </extension>
+</addon>
+<addon id="service.homelander.packfix" name="Homelander Pack Fix" version="1.0.0" provider-name="Richard Keymer">
+  <requires>
+    <import addon="xbmc.python" version="3.0.0"/>
+  </requires>
+  <extension point="xbmc.service" library="service.py" start="startup"/>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="en_GB">Self-healing patch for Homelander season-pack episode resolution</summary>
+    <description lang="en_GB">Repairs plugin.video.homelander so multi-file (season-pack) torrents resolve to the requested episode instead of whatever file the debrid resolver picks by default, and re-applies the resolveurl AllDebrid dn= filename match. Runs on Kodi startup, is idempotent, and self-heals after a Homelander or resolveurl update reverts the fix. No-ops if those add-ons are not installed. Cross-platform (Windows, Android, Linux).</description>
+    <platform>all</platform>
+    <license>GPL-3.0-or-later</license>
+  </extension>
+</addon>
+</addons>
