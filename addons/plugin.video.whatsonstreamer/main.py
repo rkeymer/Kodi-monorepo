@@ -1376,7 +1376,7 @@ def show_season_episodes(params):
             default_url = local_path
             is_playable = True
         elif ep_num in iptv_available:
-            default_url = build_url(action="play_iptv", title=title, season=season, episode=ep_num, imdb=imdb_id)
+            default_url = build_url(action="play_iptv", title=title, season=season, episode=ep_num, imdb=imdb_id, tmdb=tmdb_id)
             is_playable = False
         else:
             default_url = hl_url
@@ -1390,12 +1390,12 @@ def show_season_episodes(params):
             label += "  [COLOR orange]● IPTV[/COLOR]"
 
         ctx = [
-            ("Play via AllDebrid", f"RunPlugin({build_url(action='play_alldebrid', title=title, season=season, episode=ep_num, imdb=imdb_id)})"),
+            ("Play via AllDebrid", f"RunPlugin({build_url(action='play_alldebrid', title=title, season=season, episode=ep_num, imdb=imdb_id, tmdb=tmdb_id)})"),
         ]
         if local_path:
             ctx.append(("Play local file", f"RunPlugin({build_url(action='play_local', title=title, season=season, episode=ep_num)})"))
         ctx.append(("Play via Homelander", f"RunPlugin({hl_url})"))
-        ctx.append(("Play via IPTV", f"RunPlugin({build_url(action='play_iptv', title=title, season=season, episode=ep_num, imdb=imdb_id)})"))
+        ctx.append(("Play via IPTV", f"RunPlugin({build_url(action='play_iptv', title=title, season=season, episode=ep_num, imdb=imdb_id, tmdb=tmdb_id)})"))
         if simkl_id:
             ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id)})"))
 
@@ -1676,7 +1676,7 @@ _AD_MIME = {
 
 
 def _ad_resolve_and_play(stream_url, title, use_resolved_url=False, user_agent=None,
-                          show_title=None, season=None, episode=None, imdb_id=None):
+                          show_title=None, season=None, episode=None, imdb_id=None, tmdb_id=None):
     """Shared playback helper for AllDebrid streams and direct IPTV streams.
 
     user_agent is only passed for direct IPTV provider URLs — those servers can
@@ -1693,12 +1693,14 @@ def _ad_resolve_and_play(stream_url, title, use_resolved_url=False, user_agent=N
     Setting these explicitly is what actually makes IPTV/debrid episodes
     scrobble, not just having a nice display title.
 
-    imdb_id matters just as much: without a unique ID, script.simkl's scrobble
-    goes out as a bare title-string match ("shows": [{"title": ..., "ids": {}}]),
-    which SIMKL accepts but doesn't reliably resolve into a real watched entry
-    (confirmed - it silently didn't show up in SIMKL, unlike the equivalent
-    ID-matched local-file scrobble). Setting it here gets picked up as
-    _data["uniqueid"]["imdb"] and sent as a proper ids-matched checkin instead.
+    imdb_id/tmdb_id matter just as much: without a unique ID, script.simkl's
+    scrobble goes out as a bare title-string match ("shows": [{"title": ...,
+    "ids": {}}]), which SIMKL accepts but doesn't reliably resolve into a real
+    watched entry (confirmed - it silently didn't show up in SIMKL, unlike the
+    equivalent ID-matched local-file scrobble). Both are accepted since SIMKL's
+    own /search/tv and /search/movie endpoints never return an imdb id (only
+    simkl_id/tmdb) - confirmed live - so search-originated playback would have
+    no usable ID at all if this only took imdb.
     """
     ext = ("." + title.rsplit(".", 1)[-1].lower()) if "." in title else ""
     mime = _AD_MIME.get(ext, "")
@@ -1712,12 +1714,17 @@ def _ad_resolve_and_play(stream_url, title, use_resolved_url=False, user_agent=N
         if imdb_id:
             info["imdbnumber"] = imdb_id
         li.setInfo("video", info)
+        unique_ids = {}
         if imdb_id:
+            unique_ids["imdb"] = imdb_id
+        if tmdb_id:
+            unique_ids["tmdb"] = str(tmdb_id)
+        if unique_ids:
             # setInfo's "imdbnumber" alone tags the JSON-RPC uniqueid as type
             # "unknown", not "imdb" (confirmed live) - script.simkl's ids lookup
             # only checks the named imdb/tvdb/tmdb keys, so "unknown" is invisible
             # to it. setUniqueIDs is what actually labels it correctly.
-            li.getVideoInfoTag().setUniqueIDs({"imdb": imdb_id}, "imdb")
+            li.getVideoInfoTag().setUniqueIDs(unique_ids, "imdb" if imdb_id else "tmdb")
     else:
         li.setInfo("video", {"title": title})
     li.setContentLookup(False)
@@ -1785,7 +1792,7 @@ def play_alldebrid(params):
 
     label = fname or f"{title} S{season:02d}E{episode:02d}"
     _ad_resolve_and_play(stream_url, label, show_title=title, season=season, episode=episode,
-                          imdb_id=params.get("imdb", ""))
+                          imdb_id=params.get("imdb", ""), tmdb_id=params.get("tmdb", ""))
 
 
 # --------------------------
@@ -1821,7 +1828,7 @@ def play_iptv(params):
     label = display or f"{title} S{season:02d}E{episode:02d}"
     _ad_resolve_and_play(stream_url, label, user_agent=get_iptv_ua(),
                           show_title=title, season=season, episode=episode,
-                          imdb_id=params.get("imdb", ""))
+                          imdb_id=params.get("imdb", ""), tmdb_id=params.get("tmdb", ""))
 
 
 # --------------------------
