@@ -7,7 +7,7 @@ from resources.lib.cache import DiskCache
 _cache_recs = DiskCache("whatsupnext_recs", ttl=30 * 86400)
 _KEY = "current"
 
-MAX_ITEMS = 50
+MAX_ITEMS = 200
 _MAX_BECAUSE = 3
 
 ENGLISH_LANGUAGE = "en"
@@ -87,10 +87,15 @@ def _extract_movie_entries(data):
         )
 
 
-def _original_language(tmdb, kind: str, tmdb_id):
-    """TMDB's original_language (ISO 639-1) for a tmdb_id, or None if it can't be
-    determined (missing id or the lookup failed). Both tv_details()/movie_details()
-    are disk-cached, so this costs nothing once warm."""
+def _tmdb_details(tmdb, kind: str, tmdb_id):
+    """Full TMDB details (including credits, via append_to_response=credits on
+    the underlying tv_details()/movie_details() calls) for a tmdb_id, or None if
+    it can't be determined. Both calls are disk-cached, so this costs nothing
+    once warm - fetched once here at build time and reused for both the
+    English-only language filter and cast/genre/runtime enrichment, rather than
+    each screen re-fetching it live every time it's opened (that live per-item
+    fetch at render time is what caused the Recommended screens to time out
+    once MAX_ITEMS got large enough that most items were still cold)."""
     if not tmdb_id:
         return None
     try:
@@ -98,10 +103,8 @@ def _original_language(tmdb, kind: str, tmdb_id):
     except (TypeError, ValueError):
         return None
     if kind == "show":
-        details = _safe(lambda: tmdb.tv_details(tmdb_id_int), f"TMDB tv_details {tmdb_id_int}")
-    else:
-        details = _safe(lambda: tmdb.movie_details(tmdb_id_int), f"TMDB movie_details {tmdb_id_int}")
-    return (details or {}).get("original_language")
+        return _safe(lambda: tmdb.tv_details(tmdb_id_int), f"TMDB tv_details {tmdb_id_int}")
+    return _safe(lambda: tmdb.movie_details(tmdb_id_int), f"TMDB movie_details {tmdb_id_int}")
 
 
 def _finalize(simkl, tmdb, scores: dict, kind: str):
@@ -140,10 +143,20 @@ def _finalize(simkl, tmdb, scores: dict, kind: str):
         ids = detail.get("ids") or {}
         tmdb_id = ids.get("tmdb", "")
 
-        if filter_active and _original_language(tmdb, kind, tmdb_id) != ENGLISH_LANGUAGE:
+        tmdb_details = _tmdb_details(tmdb, kind, tmdb_id) if tmdb is not None else None
+        if filter_active and (tmdb_details or {}).get("original_language") != ENGLISH_LANGUAGE:
             continue
 
         simkl_rating = (detail.get("ratings") or {}).get("simkl") or {}
+        tmdb_details = tmdb_details or {}
+        cast = [
+            {
+                "name": c["name"],
+                "role": c.get("character") or (c.get("roles") or [{}])[0].get("character", ""),
+                "thumbnail": f"https://image.tmdb.org/t/p/w185{c['profile_path']}" if c.get("profile_path") else "",
+            }
+            for c in (tmdb_details.get("credits", {}).get("cast") or [])[:15]
+        ]
 
         out.append({
             "simkl_id": rid,
@@ -155,6 +168,9 @@ def _finalize(simkl, tmdb, scores: dict, kind: str):
             "overview": detail.get("overview") or "",
             "rating": simkl_rating.get("rating") or 0.0,
             "votes": simkl_rating.get("votes") or 0,
+            "runtime": tmdb_details.get("runtime"),
+            "genres": [g["name"] for g in (tmdb_details.get("genres") or [])],
+            "cast": cast,
             "count": entry["count"],
             "because": entry["because"],
         })

@@ -450,6 +450,7 @@ def show_new_episodes():
                 ctx.insert(0, ("Play", f"RunPlugin({build_url(action='play_episode_default', title=title, season=se[0], episode=se[1], imdb=imdb_id, tmdb=tmdb_id)})"))
             if simkl_id:
                 ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='show')})"))
+                ctx.append(("Mark as Watched", f"RunPlugin({build_url(action='recommended_watched', kind='show', simkl_id=simkl_id, title=title)})"))
                 ctx.append(("Remove", f"RunPlugin({build_url(action='recommended_remove', kind='show', simkl_id=simkl_id, title=title)})"))
             add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx, cast=show_cast or None)
 
@@ -591,6 +592,7 @@ def show_upcoming():
             ctx = [("Show Information", "Action(Info)")]
             if simkl_id:
                 ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='show')})"))
+                ctx.append(("Mark as Watched", f"RunPlugin({build_url(action='recommended_watched', kind='show', simkl_id=simkl_id, title=title)})"))
                 ctx.append(("Remove", f"RunPlugin({build_url(action='recommended_remove', kind='show', simkl_id=simkl_id, title=title)})"))
             add_item(label, info=info, art=art, context_menu=ctx, cast=show_cast or None)
 
@@ -789,6 +791,7 @@ def show_movies():
             ]
             if simkl_id:
                 ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='movie')})"))
+                ctx.append(("Mark as Watched", f"RunPlugin({build_url(action='recommended_watched', kind='movie', simkl_id=simkl_id, title=title)})"))
                 ctx.append(("Remove Movie", f"RunPlugin({build_url(action='recommended_remove', kind='movie', simkl_id=simkl_id, title=title)})"))
 
             add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx, cast=movie_cast or None)
@@ -836,35 +839,15 @@ def _add_recommended_item(item, kind):
         if purl:
             art = {"thumb": purl, "poster": purl, "icon": purl}
 
-    # TMDB enrichment - cast for the info dialog, plus richer rating/genre/
-    # runtime for movies. Same treatment as Movies/New Episodes/Upcoming.
-    cast = []
-    genres = []
-    runtime = None
-    if tmdb_id and use_tmdb_airdates(addon):
-        try:
-            tmdb = TmdbApi(addon)
-            if tmdb.is_configured():
-                details = tmdb.movie_details(int(tmdb_id)) if kind == "movie" else tmdb.tv_details(int(tmdb_id))
-                if not overview:
-                    overview = details.get("overview") or ""
-                if not rating:
-                    rating = details.get("vote_average") or 0.0
-                if not votes:
-                    votes = details.get("vote_count") or 0
-                if kind == "movie":
-                    runtime = details.get("runtime")
-                genres = [g["name"] for g in (details.get("genres") or [])]
-                cast = [
-                    {
-                        "name": c["name"],
-                        "role": c.get("character") or (c.get("roles") or [{}])[0].get("character", ""),
-                        "thumbnail": f"https://image.tmdb.org/t/p/w185{c['profile_path']}" if c.get("profile_path") else "",
-                    }
-                    for c in (details.get("credits", {}).get("cast") or [])[:15]
-                ]
-        except Exception as e:
-            xbmc.log(f"[WhatsOnStreamer][TMDB] {kind} details lookup failed for {title}: {e}", xbmc.LOGERROR)
+    # Cast/genre/runtime come pre-baked from recommendations.build()'s own TMDB
+    # lookup (which already fetches these per item to apply the English-only
+    # filter) - NOT fetched live here. A live per-item fetch at render time is
+    # what caused this screen to time out once MAX_ITEMS got large enough that
+    # most items were still cold (confirmed: dozens of sequential uncached TMDB
+    # calls, Kodi's GetDirectory gave up while the script kept running).
+    cast = item.get("cast") or []
+    genres = item.get("genres") or []
+    runtime = item.get("runtime") if kind == "movie" else None
 
     plot = overview
     if because:
@@ -972,11 +955,11 @@ def recommended_remove(params):
 
 
 def recommended_watched(params):
-    """Context-menu 'Mark as Watched' on a Recommended item: sets it 'completed'
-    in SIMKL (SimklApi.add_to_completed - for shows this marks every aired
-    episode watched), so it counts as real watch history for future
-    recommendation seeding rather than being excluded like a drop. Removes it
-    from the cached Recommended list immediately, same as recommended_remove()."""
+    """Context-menu 'Mark as Watched': POSTs real watch history via
+    SimklApi.mark_watched() (/sync/history - for a show this marks every
+    aired episode watched), so it counts toward future recommendation seeding
+    rather than being excluded like a drop. Removes it from the cached
+    Recommended list immediately, same as recommended_remove()."""
     kind = params.get("kind", "show")
     title = params.get("title", "this title")
     try:
@@ -992,14 +975,76 @@ def recommended_watched(params):
         return
 
     try:
-        api.add_to_completed(kind, simkl_id)
+        api.mark_watched(kind, simkl_id)
     except Exception as e:
-        xbmc.log(f"[WhatsOnStreamer] add_to_completed failed for {title}: {e}", xbmc.LOGERROR)
+        xbmc.log(f"[WhatsOnStreamer] mark_watched failed for {title}: {e}", xbmc.LOGERROR)
         xbmcgui.Dialog().notification("WhatsOnStreamer", "Failed to mark as watched in SIMKL", xbmcgui.NOTIFICATION_ERROR)
         return
 
     recommendations.remove_item(kind, simkl_id)
     xbmcgui.Dialog().notification("WhatsOnStreamer", f"Marked watched: {title}", xbmcgui.NOTIFICATION_INFO, 1500)
+
+
+def mark_episode_watched(params):
+    """Context-menu 'Mark Episode as Watched' inside an episode list - marks
+    just that one episode via SimklApi.mark_episode_watched(), not the whole
+    show. Refreshes the container so the playcount tick shows up immediately
+    (mark_episode_watched() clears the 2-min watching-status cache too)."""
+    title = params.get("title", "this title")
+    try:
+        simkl_id = int(params.get("simkl_id", ""))
+        season = int(params.get("season", ""))
+        episode = int(params.get("episode", ""))
+    except (TypeError, ValueError):
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Missing SIMKL id/season/episode", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    addon = xbmcaddon.Addon()
+    api = SimklApi(addon)
+    if not api.is_authorized():
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Not authorized with SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    try:
+        api.mark_episode_watched(simkl_id, season, episode)
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] mark_episode_watched failed for {title} S{season:02d}E{episode:02d}: {e}", xbmc.LOGERROR)
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Failed to mark episode as watched in SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    xbmcgui.Dialog().notification("WhatsOnStreamer", f"Marked watched: {title} S{season:02d}E{episode:02d}", xbmcgui.NOTIFICATION_INFO, 1500)
+
+
+def mark_season_watched(params):
+    """Context-menu 'Mark Season as Watched' - marks every episode number in
+    `episodes` (comma-separated, built from the same episode list the screen
+    already rendered) via SimklApi.mark_season_watched()."""
+    title = params.get("title", "this title")
+    try:
+        simkl_id = int(params.get("simkl_id", ""))
+        season = int(params.get("season", ""))
+        episode_numbers = [int(e) for e in params.get("episodes", "").split(",") if e]
+    except (TypeError, ValueError):
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Missing SIMKL id/season/episodes", xbmcgui.NOTIFICATION_ERROR)
+        return
+    if not episode_numbers:
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "No episodes to mark", xbmcgui.NOTIFICATION_WARNING)
+        return
+
+    addon = xbmcaddon.Addon()
+    api = SimklApi(addon)
+    if not api.is_authorized():
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Not authorized with SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    try:
+        api.mark_season_watched(simkl_id, season, episode_numbers)
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] mark_season_watched failed for {title} S{season:02d}: {e}", xbmc.LOGERROR)
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Failed to mark season as watched in SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    xbmcgui.Dialog().notification("WhatsOnStreamer", f"Marked watched: {title} Season {season}", xbmcgui.NOTIFICATION_INFO, 1500)
 
 
 def recommended_watchlist(params):
@@ -1352,9 +1397,12 @@ def show_seasons(params):
 
         ctx = None
         if simkl_id:
+            season_eps = ",".join(str(n) for n in range(1, (ep_count or 1) + 1))
             ctx = [
                 ("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='show')})"),
                 ("Add to Watchlist", f"RunPlugin({build_url(action='recommended_watchlist', kind='show', simkl_id=simkl_id, title=title)})"),
+                ("Mark Season as Watched", f"RunPlugin({build_url(action='mark_season_watched', simkl_id=simkl_id, season=sn, episodes=season_eps, title=title)})"),
+                ("Mark Show as Watched", f"RunPlugin({build_url(action='recommended_watched', kind='show', simkl_id=simkl_id, title=title)})"),
             ]
 
         add_item(label, url=url, art=art, is_folder=True, context_menu=ctx)
@@ -1487,6 +1535,8 @@ def show_season_episodes(params):
 
     today = date.today()
 
+    season_eps = ",".join(str(ep["ep_num"]) for ep in episodes)
+
     for ep in episodes:
         ep_num    = ep["ep_num"]
         ep_title  = ep["ep_title"]
@@ -1556,6 +1606,9 @@ def show_season_episodes(params):
         ctx.append(("Play via IPTV", f"RunPlugin({build_url(action='play_iptv', title=title, season=season, episode=ep_num, imdb=imdb_id, tmdb=tmdb_id)})"))
         if simkl_id:
             ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id)})"))
+            ctx.append(("Mark Episode as Watched", f"RunPlugin({build_url(action='mark_episode_watched', simkl_id=simkl_id, season=season, episode=ep_num, title=title)})"))
+            ctx.append(("Mark Season as Watched", f"RunPlugin({build_url(action='mark_season_watched', simkl_id=simkl_id, season=season, episodes=season_eps, title=title)})"))
+            ctx.append(("Mark Show as Watched", f"RunPlugin({build_url(action='recommended_watched', kind='show', simkl_id=simkl_id, title=title)})"))
 
         info = {
             "title": ep_title,
@@ -2282,6 +2335,10 @@ def router():
         recommended_watchlist(params); xbmc.executebuiltin('Container.Refresh')
     elif action == "recommended_watched":
         recommended_watched(params); xbmc.executebuiltin('Container.Refresh')
+    elif action == "mark_episode_watched":
+        mark_episode_watched(params); xbmc.executebuiltin('Container.Refresh')
+    elif action == "mark_season_watched":
+        mark_season_watched(params); xbmc.executebuiltin('Container.Refresh')
     elif action == "search_menu":
         show_search_menu()
     elif action == "search_series":

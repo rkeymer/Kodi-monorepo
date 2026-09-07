@@ -216,12 +216,38 @@ class SimklApi:
     def add_to_dropped(self, kind: str, simkl_id: int) -> dict:
         return self._set_list_status(kind, simkl_id, "dropped")
 
-    def add_to_completed(self, kind: str, simkl_id: int) -> dict:
-        """SIMKL treats 'completed' as fully watched for both kinds - for a show
-        this marks every aired episode watched, same as if you'd scrobbled
-        through the whole thing, so it counts toward future recommendation
-        seeding same as any other watch history."""
-        return self._set_list_status(kind, simkl_id, "completed")
+    def mark_watched(self, kind: str, simkl_id: int) -> dict:
+        """POST /sync/history — the actual watch-history endpoint (same one
+        script.simkl's own scrobbler uses), not /sync/add-to-list. Confirmed
+        live: add-to-list's 'completed' status moves the item's list bucket but
+        does NOT reliably create real episode watch history for a show - the
+        episode stayed unmarked despite the show showing as 'completed'.
+        Omitting "seasons" for a show tells SIMKL to mark every aired episode
+        watched, same as scrobbling through the whole thing."""
+        key = "shows" if kind == "show" else "movies"
+        body = {key: [{"ids": {"simkl": int(simkl_id)}}]}
+        result = self._post("/sync/history", body, auth=True)
+        _cache_watching.clear()
+        return result
+
+    def mark_episode_watched(self, simkl_id: int, season: int, episode: int) -> dict:
+        """POST /sync/history for one specific episode - same shape script.simkl's
+        own scrobbler sends, see mark_watched()."""
+        body = {"shows": [{"ids": {"simkl": int(simkl_id)}, "seasons": [
+            {"number": int(season), "episodes": [{"number": int(episode)}]}
+        ]}]}
+        result = self._post("/sync/history", body, auth=True)
+        _cache_watching.clear()
+        return result
+
+    def mark_season_watched(self, simkl_id: int, season: int, episode_numbers) -> dict:
+        """POST /sync/history for every episode number given in one season."""
+        body = {"shows": [{"ids": {"simkl": int(simkl_id)}, "seasons": [
+            {"number": int(season), "episodes": [{"number": int(e)} for e in episode_numbers]}
+        ]}]}
+        result = self._post("/sync/history", body, auth=True)
+        _cache_watching.clear()
+        return result
 
     def add_to_watchlist(self, kind: str, simkl_id: int) -> dict:
         """Shows go to 'watching' (actively tracking); movies can't use that status
