@@ -36,7 +36,7 @@ ANCHOR_HL = re.compile(
     r'[ \t]*if hmf:\r?\n'
     r'[ \t]*u = url = hmf\.resolve\(\)[ \t]*$'
 )
-ANCHOR_RU = re.compile(r'(?m)^([ \t]*)media_id = max\(sources\)\[1\][ \t]*$')
+ANCHOR_RU = re.compile(r'(?m)^([ \t]*)media_id = max\(sources\)\[1\][ \t]*\r?$')
 
 HL_BLOCK = """# _kmr_pack: multi-file magnet fix - resolve to the requested episode
 # instead of letting the debrid resolver default to the largest file.
