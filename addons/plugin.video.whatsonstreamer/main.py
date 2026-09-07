@@ -289,6 +289,11 @@ def show_tools_menu():
 def show_new_episodes():
     xbmcplugin.setPluginCategory(HANDLE, "New Episodes")
     xbmcplugin.setContent(HANDLE, "tvshows")
+    # Without this, Kodi silently re-sorts by whatever the skin's default/last
+    # -used sort method is (usually Title) regardless of the order we build -
+    # confirmed live on Recommended Movies. This list is deliberately ordered
+    # by most-recently-watched first, not alphabetically.
+    xbmcplugin.addSortMethod(HANDLE, xbmcplugin.SORT_METHOD_UNSORTED)
     addon = xbmcaddon.Addon()
     api = SimklApi(addon)
 
@@ -469,6 +474,7 @@ def show_upcoming():
     """
     xbmcplugin.setPluginCategory(HANDLE, "Upcoming Episodes")
     xbmcplugin.setContent(HANDLE, "tvshows")
+    xbmcplugin.addSortMethod(HANDLE, xbmcplugin.SORT_METHOD_UNSORTED)
     addon = xbmcaddon.Addon()
     tmdb_api = TmdbApi(addon)
     api = SimklApi(addon)
@@ -607,6 +613,7 @@ def show_upcoming():
 def show_movies():
     xbmcplugin.setPluginCategory(HANDLE, "Movies")
     xbmcplugin.setContent(HANDLE, "movies")
+    xbmcplugin.addSortMethod(HANDLE, xbmcplugin.SORT_METHOD_UNSORTED)
     addon = xbmcaddon.Addon()
     api = SimklApi(addon)
 
@@ -900,6 +907,7 @@ def _add_recommended_item(item, kind):
 def show_recommended_shows():
     xbmcplugin.setPluginCategory(HANDLE, "Recommended Shows")
     xbmcplugin.setContent(HANDLE, "tvshows")
+    xbmcplugin.addSortMethod(HANDLE, xbmcplugin.SORT_METHOD_UNSORTED)
     data = recommendations.load()
     shows = (data or {}).get("shows") or []
     if not shows:
@@ -914,6 +922,7 @@ def show_recommended_shows():
 def show_recommended_movies():
     xbmcplugin.setPluginCategory(HANDLE, "Recommended Movies")
     xbmcplugin.setContent(HANDLE, "movies")
+    xbmcplugin.addSortMethod(HANDLE, xbmcplugin.SORT_METHOD_UNSORTED)
     data = recommendations.load()
     movies = (data or {}).get("movies") or []
     if not movies:
