@@ -140,7 +140,16 @@ class IptvApi:
             if not stream_id:
                 continue
             ext = ep.get("container_extension") or "mp4"
-            display = ep.get("title") or f"{show_title} S{season:02d}E{target:02d}"
+            # Xtream's per-episode "title" is often just the bare episode title
+            # (e.g. "Pilot") with no show name in it - SIMKL's Kodi auto-scrobbler
+            # fuzzy-matches on Kodi's exposed "now playing" title, so without the
+            # show name here it can't identify the episode and silently skips it
+            # (see play_local's equivalent label, which always leads with the show
+            # name for the same reason). Always lead with "{show} SxxEyy" and only
+            # append the API's own title, if any, as extra context.
+            ep_title = (ep.get("title") or "").strip()
+            base = f"{show_title} S{season:02d}E{target:02d}"
+            display = f"{base} - {ep_title}" if ep_title else base
             stream_url = f"{self._base_url}/series/{self._username}/{self._password}/{stream_id}.{ext}"
             return stream_url, display
         return None, None

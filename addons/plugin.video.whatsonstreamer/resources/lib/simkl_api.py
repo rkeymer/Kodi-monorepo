@@ -10,6 +10,7 @@ API_BASE = "https://api.simkl.com"
 
 _cache_show = DiskCache("simkl_show", ttl=7 * 86400)  # 7 days — trailer/ids rarely change
 _cache_movie = DiskCache("simkl_movie", ttl=7 * 86400)  # 7 days — mirrors _cache_show
+_cache_watching = DiskCache("simkl_watching", ttl=120)  # 2 min — account-wide, hit on every season screen
 
 class SimklApi:
     def __init__(self, addon):
@@ -148,6 +149,45 @@ class SimklApi:
 
     def get_completed_shows(self):
         return self._get("/sync/all-items/shows/completed", params={"extended": "full"}, auth=True)
+
+    def is_show_completed(self, simkl_id: int) -> bool:
+        """True if the whole show is on SIMKL's completed list — no per-episode
+        breakdown exists there, so callers should treat every episode as watched
+        rather than calling get_watched_episodes for a season number."""
+        cached = self._watching_and_completed()
+        return any(
+            ((it.get("show") or {}).get("ids") or {}).get("simkl") == simkl_id
+            for it in cached["completed"]
+        )
+
+    def get_watched_episodes(self, simkl_id: int, season: int) -> set:
+        """Episode numbers SIMKL already has marked watched for this show/season,
+        so the season screen can show a native Kodi playcount checkmark. Reuses
+        the same "watching" sync as WhatsUpNext, cached briefly since it's an
+        account-wide fetch that would otherwise re-run on every season browse.
+        """
+        cached = self._watching_and_completed()
+        for it in cached["watching"]:
+            if ((it.get("show") or {}).get("ids") or {}).get("simkl") != simkl_id:
+                continue
+            for s in it.get("seasons") or []:
+                if s.get("number") == season:
+                    return {e["number"] for e in (s.get("episodes") or []) if "number" in e}
+        return set()
+
+    def _watching_and_completed(self) -> dict:
+        cache_key = "watching-and-completed"
+        cached = _cache_watching.get(cache_key)
+        if cached is not None:
+            return cached
+        watching = self.get_watching_shows()
+        completed = self.get_completed_shows()
+        cached = {
+            "watching": (watching or {}).get("shows") or [],
+            "completed": (completed or {}).get("shows") or [],
+        }
+        _cache_watching.set(cache_key, cached)
+        return cached
 
     def get_plan_movies(self):
         """

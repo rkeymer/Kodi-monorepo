@@ -1314,6 +1314,19 @@ def show_season_episodes(params):
     except Exception as e:
         xbmc.log(f"[WhatsOnStreamer] IPTV availability check failed: {e}", xbmc.LOGERROR)
 
+    # Fetch SIMKL watched status for this season, for the native playcount tick
+    watched_available = set()
+    show_completed = False
+    if simkl_id:
+        try:
+            simkl_api = SimklApi(addon)
+            if simkl_api.is_authorized():
+                show_completed = simkl_api.is_show_completed(int(simkl_id))
+                if not show_completed:
+                    watched_available = simkl_api.get_watched_episodes(int(simkl_id), season)
+        except Exception as e:
+            xbmc.log(f"[WhatsOnStreamer] SIMKL watched-status check failed: {e}", xbmc.LOGERROR)
+
     today = date.today()
 
     for ep in episodes:
@@ -1363,7 +1376,7 @@ def show_season_episodes(params):
             default_url = local_path
             is_playable = True
         elif ep_num in iptv_available:
-            default_url = build_url(action="play_iptv", title=title, season=season, episode=ep_num)
+            default_url = build_url(action="play_iptv", title=title, season=season, episode=ep_num, imdb=imdb_id)
             is_playable = False
         else:
             default_url = hl_url
@@ -1377,12 +1390,12 @@ def show_season_episodes(params):
             label += "  [COLOR orange]● IPTV[/COLOR]"
 
         ctx = [
-            ("Play via AllDebrid", f"RunPlugin({build_url(action='play_alldebrid', title=title, season=season, episode=ep_num)})"),
+            ("Play via AllDebrid", f"RunPlugin({build_url(action='play_alldebrid', title=title, season=season, episode=ep_num, imdb=imdb_id)})"),
         ]
         if local_path:
             ctx.append(("Play local file", f"RunPlugin({build_url(action='play_local', title=title, season=season, episode=ep_num)})"))
         ctx.append(("Play via Homelander", f"RunPlugin({hl_url})"))
-        ctx.append(("Play via IPTV", f"RunPlugin({build_url(action='play_iptv', title=title, season=season, episode=ep_num)})"))
+        ctx.append(("Play via IPTV", f"RunPlugin({build_url(action='play_iptv', title=title, season=season, episode=ep_num, imdb=imdb_id)})"))
         if simkl_id:
             ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id)})"))
 
@@ -1406,6 +1419,8 @@ def show_season_episodes(params):
             info["director"] = ", ".join(directors)
         if writers:
             info["writer"] = ", ".join(writers)
+        if show_completed or ep_num in watched_available:
+            info["playcount"] = 1
 
         add_item(
             label, url=default_url,
@@ -1660,19 +1675,51 @@ _AD_MIME = {
 }
 
 
-def _ad_resolve_and_play(stream_url, title, use_resolved_url=False, user_agent=None):
+def _ad_resolve_and_play(stream_url, title, use_resolved_url=False, user_agent=None,
+                          show_title=None, season=None, episode=None, imdb_id=None):
     """Shared playback helper for AllDebrid streams and direct IPTV streams.
 
     user_agent is only passed for direct IPTV provider URLs — those servers can
     silently reject Kodi's default player UA (empty body, instant EOF from the
     demuxer). AllDebrid's already-resolved CDN links don't need it and shouldn't
     get an unrelated header appended.
+
+    show_title/season/episode are only passed for TV episodes. script.simkl's
+    scrobbler (engine.py _detect_item) reads season/episode straight off Kodi's
+    own exposed video info if both are > 0, and only falls back to parsing the
+    "file" path otherwise — which is useless here since that's a stream URL
+    with no show name in it (unlike local files, where the path itself is
+    "Show/Season NN/Show SxxEyy.ext" and gets identified that way instead).
+    Setting these explicitly is what actually makes IPTV/debrid episodes
+    scrobble, not just having a nice display title.
+
+    imdb_id matters just as much: without a unique ID, script.simkl's scrobble
+    goes out as a bare title-string match ("shows": [{"title": ..., "ids": {}}]),
+    which SIMKL accepts but doesn't reliably resolve into a real watched entry
+    (confirmed - it silently didn't show up in SIMKL, unlike the equivalent
+    ID-matched local-file scrobble). Setting it here gets picked up as
+    _data["uniqueid"]["imdb"] and sent as a proper ids-matched checkin instead.
     """
     ext = ("." + title.rsplit(".", 1)[-1].lower()) if "." in title else ""
     mime = _AD_MIME.get(ext, "")
     play_path = f"{stream_url}|User-Agent={urllib.parse.quote(user_agent)}" if user_agent else stream_url
     li = xbmcgui.ListItem(label=title, path=play_path)
-    li.setInfo("video", {"title": title})
+    if show_title and season and episode:
+        info = {
+            "title": title, "tvshowtitle": show_title,
+            "season": season, "episode": episode, "mediatype": "episode",
+        }
+        if imdb_id:
+            info["imdbnumber"] = imdb_id
+        li.setInfo("video", info)
+        if imdb_id:
+            # setInfo's "imdbnumber" alone tags the JSON-RPC uniqueid as type
+            # "unknown", not "imdb" (confirmed live) - script.simkl's ids lookup
+            # only checks the named imdb/tvdb/tmdb keys, so "unknown" is invisible
+            # to it. setUniqueIDs is what actually labels it correctly.
+            li.getVideoInfoTag().setUniqueIDs({"imdb": imdb_id}, "imdb")
+    else:
+        li.setInfo("video", {"title": title})
     li.setContentLookup(False)
     if mime:
         li.setMimeType(mime)
@@ -1737,7 +1784,8 @@ def play_alldebrid(params):
         return
 
     label = fname or f"{title} S{season:02d}E{episode:02d}"
-    _ad_resolve_and_play(stream_url, label)
+    _ad_resolve_and_play(stream_url, label, show_title=title, season=season, episode=episode,
+                          imdb_id=params.get("imdb", ""))
 
 
 # --------------------------
@@ -1771,7 +1819,9 @@ def play_iptv(params):
         return
 
     label = display or f"{title} S{season:02d}E{episode:02d}"
-    _ad_resolve_and_play(stream_url, label, user_agent=get_iptv_ua())
+    _ad_resolve_and_play(stream_url, label, user_agent=get_iptv_ua(),
+                          show_title=title, season=season, episode=episode,
+                          imdb_id=params.get("imdb", ""))
 
 
 # --------------------------

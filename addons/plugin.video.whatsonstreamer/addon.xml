@@ -2,7 +2,7 @@
 <addon
     id="plugin.video.whatsonstreamer"
     name="WhatsOnStreamer"
-    version="0.2.41"
+    version="0.2.42"
     provider-name="Personal">
 
     <requires>
