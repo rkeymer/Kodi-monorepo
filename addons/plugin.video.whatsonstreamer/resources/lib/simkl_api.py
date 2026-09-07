@@ -216,6 +216,13 @@ class SimklApi:
     def add_to_dropped(self, kind: str, simkl_id: int) -> dict:
         return self._set_list_status(kind, simkl_id, "dropped")
 
+    def add_to_completed(self, kind: str, simkl_id: int) -> dict:
+        """SIMKL treats 'completed' as fully watched for both kinds - for a show
+        this marks every aired episode watched, same as if you'd scrobbled
+        through the whole thing, so it counts toward future recommendation
+        seeding same as any other watch history."""
+        return self._set_list_status(kind, simkl_id, "completed")
+
     def add_to_watchlist(self, kind: str, simkl_id: int) -> dict:
         """Shows go to 'watching' (actively tracking); movies can't use that status
         (SIMKL only allows plantowatch/completed/dropped for movies), so they go to

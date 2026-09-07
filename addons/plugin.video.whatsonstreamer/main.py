@@ -288,6 +288,7 @@ def show_tools_menu():
 
 def show_new_episodes():
     xbmcplugin.setPluginCategory(HANDLE, "New Episodes")
+    xbmcplugin.setContent(HANDLE, "tvshows")
     addon = xbmcaddon.Addon()
     api = SimklApi(addon)
 
@@ -395,12 +396,21 @@ def show_new_episodes():
 
             # TMDB details — uses cache (2-day TTL), fetches only on first encounter
             tmdb_vote_avg = None
+            show_cast = []
             if tmdb_id and tmdb_api.is_configured():
                 try:
                     tmdb_det = tmdb_api.tv_details(int(tmdb_id))
                     tmdb_vote_avg = tmdb_det.get("vote_average")
                     if not overview:
                         overview = tmdb_det.get("overview") or ""
+                    show_cast = [
+                        {
+                            "name": c["name"],
+                            "role": c.get("character") or (c.get("roles") or [{}])[0].get("character", ""),
+                            "thumbnail": f"https://image.tmdb.org/t/p/w185{c['profile_path']}" if c.get("profile_path") else "",
+                        }
+                        for c in (tmdb_det.get("credits", {}).get("cast") or [])[:15]
+                    ]
                 except Exception as e:
                     xbmc.log(f"[WhatsOnStreamer] TMDB tv_details failed for {title}: {e}", xbmc.LOGERROR)
 
@@ -432,12 +442,16 @@ def show_new_episodes():
                 info["rating"] = float(simkl_rating)
             if simkl_votes:
                 info["votes"] = str(simkl_votes)
+            if simkl_id:
+                info["trailer"] = build_url(action="play_trailer", title=title, simkl_id=simkl_id, kind="show")
 
-            ctx = [
-                ("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='show')})"),
-                ("Remove", f"RunPlugin({build_url(action='recommended_remove', kind='show', simkl_id=simkl_id, title=title)})"),
-            ]
-            add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx)
+            ctx = [("Show Information", "Action(Info)")]
+            if se:
+                ctx.insert(0, ("Play", f"RunPlugin({build_url(action='play_episode_default', title=title, season=se[0], episode=se[1], imdb=imdb_id, tmdb=tmdb_id)})"))
+            if simkl_id:
+                ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='show')})"))
+                ctx.append(("Remove", f"RunPlugin({build_url(action='recommended_remove', kind='show', simkl_id=simkl_id, title=title)})"))
+            add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx, cast=show_cast or None)
 
         end_dir()
 
@@ -453,7 +467,9 @@ def show_upcoming():
       - Sort by newest release date (airdate descending).
     """
     xbmcplugin.setPluginCategory(HANDLE, "Upcoming Episodes")
+    xbmcplugin.setContent(HANDLE, "tvshows")
     addon = xbmcaddon.Addon()
+    tmdb_api = TmdbApi(addon)
     api = SimklApi(addon)
 
     if not api.is_authorized():
@@ -506,7 +522,7 @@ def show_upcoming():
                 if not airdate:
                     airdate = tmdb_next_episode_airdate(addon, tmdb_id)
 
-            rows.append((not_aired, title, next_to_watch, airdate, poster_path, simkl_id))
+            rows.append((not_aired, title, next_to_watch, airdate, poster_path, simkl_id, tmdb_id))
 
         if not rows:
             add_item("No upcoming episodes found (or you have new aired episodes instead).")
@@ -515,7 +531,7 @@ def show_upcoming():
 
         # Sort by newest known airdate first (descending). Unknown dates go bottom.
         def _sort_key(row):
-            _, title, _, airdate, _, _ = row
+            _, title, _, airdate, _, _, _ = row
             d = _parse_ymd_date(airdate)
             if d is None:
                 return (1, float("inf"), title.lower())
@@ -525,7 +541,7 @@ def show_upcoming():
 
         show_posters = addon.getSettingBool("show_posters")
 
-        for _, title, _, airdate, poster_path, simkl_id in rows:
+        for _, title, _, airdate, poster_path, simkl_id, tmdb_id in rows:
             # Keep your existing label rules/countdown, just change ordering.
             d = _days_until(airdate)
 
@@ -545,10 +561,38 @@ def show_upcoming():
                 if url:
                     art = {"thumb": url, "poster": url, "icon": url}
 
-            ctx = [
-                ("Remove", f"RunPlugin({build_url(action='recommended_remove', kind='show', simkl_id=simkl_id, title=title)})"),
-            ] if simkl_id else None
-            add_item(label, info={"title": title}, art=art, context_menu=ctx)
+            overview = ""
+            vote_average = 0.0
+            show_cast = []
+            if tmdb_id and tmdb_api.is_configured():
+                try:
+                    tmdb_det = tmdb_api.tv_details(int(tmdb_id))
+                    overview = tmdb_det.get("overview") or ""
+                    vote_average = tmdb_det.get("vote_average") or 0.0
+                    show_cast = [
+                        {
+                            "name": c["name"],
+                            "role": c.get("character") or (c.get("roles") or [{}])[0].get("character", ""),
+                            "thumbnail": f"https://image.tmdb.org/t/p/w185{c['profile_path']}" if c.get("profile_path") else "",
+                        }
+                        for c in (tmdb_det.get("credits", {}).get("cast") or [])[:15]
+                    ]
+                except Exception as e:
+                    xbmc.log(f"[WhatsOnStreamer] TMDB tv_details failed for {title}: {e}", xbmc.LOGERROR)
+
+            info = {"title": title, "tvshowtitle": title}
+            if overview:
+                info["plot"] = overview
+            if vote_average:
+                info["rating"] = float(vote_average)
+            if simkl_id:
+                info["trailer"] = build_url(action="play_trailer", title=title, simkl_id=simkl_id, kind="show")
+
+            ctx = [("Show Information", "Action(Info)")]
+            if simkl_id:
+                ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='show')})"))
+                ctx.append(("Remove", f"RunPlugin({build_url(action='recommended_remove', kind='show', simkl_id=simkl_id, title=title)})"))
+            add_item(label, info=info, art=art, context_menu=ctx, cast=show_cast or None)
 
         end_dir()
 
@@ -560,6 +604,7 @@ def show_upcoming():
 
 def show_movies():
     xbmcplugin.setPluginCategory(HANDLE, "Movies")
+    xbmcplugin.setContent(HANDLE, "movies")
     addon = xbmcaddon.Addon()
     api = SimklApi(addon)
 
@@ -668,6 +713,11 @@ def show_movies():
             release_date = movie.get("released") or movie.get("release_date") or ""
 
             tmdb_art = None
+            vote_average = 0.0
+            vote_count = 0
+            runtime = None
+            genres = []
+            movie_cast = []
             if tmdb_enabled and tmdb_id:
                 try:
                     details = TmdbApi(addon).movie_details(int(tmdb_id))
@@ -676,6 +726,18 @@ def show_movies():
                     if not release_date:
                         release_date = details.get("release_date") or release_date
                     tmdb_art = tmdb_poster_url(details.get("poster_path"))
+                    vote_average = details.get("vote_average") or 0.0
+                    vote_count = details.get("vote_count") or 0
+                    runtime = details.get("runtime")
+                    genres = [g["name"] for g in (details.get("genres") or [])]
+                    movie_cast = [
+                        {
+                            "name": c["name"],
+                            "role": c.get("character") or "",
+                            "thumbnail": f"https://image.tmdb.org/t/p/w185{c['profile_path']}" if c.get("profile_path") else "",
+                        }
+                        for c in (details.get("credits", {}).get("cast") or [])[:15]
+                    ]
                 except Exception as e:
                     xbmc.log(f"[WhatsOnStreamer][TMDB] movie details lookup failed: {e}", xbmc.LOGERROR)
 
@@ -699,6 +761,21 @@ def show_movies():
                 info["year"] = str(year)
             if overview:
                 info["plot"] = overview
+            if vote_average:
+                info["rating"] = float(vote_average)
+            if vote_count:
+                info["votes"] = str(vote_count)
+            if runtime:
+                info["duration"] = int(runtime) * 60
+            if genres:
+                info["genre"] = ", ".join(genres)
+            if simkl_id:
+                # Populates Kodi's native "Play Trailer" button on the info
+                # dialog itself, not just the right-click menu - Kodi treats
+                # this as a playable path and PlayMedia()s it when clicked,
+                # which chains into play_trailer()'s own PlayMedia hand-off
+                # to plugin.video.youtube.
+                info["trailer"] = build_url(action="play_trailer", title=title, simkl_id=simkl_id, kind="movie")
 
             url = build_url(
                 action="show_movie",
@@ -706,7 +783,15 @@ def show_movies():
                 simkl_poster=poster_path or "", simkl_id=str(simkl_id),
             )
 
-            add_item(label, url=url, info=info, art=art, is_folder=True)
+            ctx = [
+                ("Play", f"RunPlugin({build_url(action='play_movie_default', title=title, imdb=imdb_id, tmdb=str(tmdb_id))})"),
+                ("Movie Information", "Action(Info)"),
+            ]
+            if simkl_id:
+                ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='movie')})"))
+                ctx.append(("Remove Movie", f"RunPlugin({build_url(action='recommended_remove', kind='movie', simkl_id=simkl_id, title=title)})"))
+
+            add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx, cast=movie_cast or None)
 
         end_dir()
 
@@ -743,12 +828,43 @@ def _add_recommended_item(item, kind):
 
     label = f"{title} ({year})" if year else title
 
+    addon = xbmcaddon.Addon()
     art = None
-    show_posters = xbmcaddon.Addon().getSettingBool("show_posters")
+    show_posters = addon.getSettingBool("show_posters")
     if show_posters:
         purl = simkl_poster_url(poster_path)
         if purl:
             art = {"thumb": purl, "poster": purl, "icon": purl}
+
+    # TMDB enrichment - cast for the info dialog, plus richer rating/genre/
+    # runtime for movies. Same treatment as Movies/New Episodes/Upcoming.
+    cast = []
+    genres = []
+    runtime = None
+    if tmdb_id and use_tmdb_airdates(addon):
+        try:
+            tmdb = TmdbApi(addon)
+            if tmdb.is_configured():
+                details = tmdb.movie_details(int(tmdb_id)) if kind == "movie" else tmdb.tv_details(int(tmdb_id))
+                if not overview:
+                    overview = details.get("overview") or ""
+                if not rating:
+                    rating = details.get("vote_average") or 0.0
+                if not votes:
+                    votes = details.get("vote_count") or 0
+                if kind == "movie":
+                    runtime = details.get("runtime")
+                genres = [g["name"] for g in (details.get("genres") or [])]
+                cast = [
+                    {
+                        "name": c["name"],
+                        "role": c.get("character") or (c.get("roles") or [{}])[0].get("character", ""),
+                        "thumbnail": f"https://image.tmdb.org/t/p/w185{c['profile_path']}" if c.get("profile_path") else "",
+                    }
+                    for c in (details.get("credits", {}).get("cast") or [])[:15]
+                ]
+        except Exception as e:
+            xbmc.log(f"[WhatsOnStreamer][TMDB] {kind} details lookup failed for {title}: {e}", xbmc.LOGERROR)
 
     plot = overview
     if because:
@@ -766,6 +882,12 @@ def _add_recommended_item(item, kind):
         info["rating"] = float(rating)
     if votes:
         info["votes"] = str(votes)
+    if runtime:
+        info["duration"] = int(runtime) * 60
+    if genres:
+        info["genre"] = ", ".join(genres)
+    if simkl_id:
+        info["trailer"] = build_url(action="play_trailer", title=title, simkl_id=simkl_id, kind=kind)
 
     if kind == "show":
         url = build_url(
@@ -780,17 +902,21 @@ def _add_recommended_item(item, kind):
             simkl_poster=poster_path or "", simkl_id=str(simkl_id),
         )
 
-    ctx = [
-        ("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind=kind)})"),
-        ("Add to Watchlist", f"RunPlugin({build_url(action='recommended_watchlist', kind=kind, simkl_id=simkl_id, title=title)})"),
-        ("Remove", f"RunPlugin({build_url(action='recommended_remove', kind=kind, simkl_id=simkl_id, title=title)})"),
-    ]
+    ctx = []
+    if kind == "movie":
+        ctx.append(("Play", f"RunPlugin({build_url(action='play_movie_default', title=title, imdb=imdb_id, tmdb=str(tmdb_id))})"))
+    ctx.append((f"{'Movie' if kind == 'movie' else 'Show'} Information", "Action(Info)"))
+    ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind=kind)})"))
+    ctx.append(("Add to Watchlist", f"RunPlugin({build_url(action='recommended_watchlist', kind=kind, simkl_id=simkl_id, title=title)})"))
+    ctx.append(("Mark as Watched", f"RunPlugin({build_url(action='recommended_watched', kind=kind, simkl_id=simkl_id, title=title)})"))
+    ctx.append((f"Remove {'Movie' if kind == 'movie' else 'Show'}", f"RunPlugin({build_url(action='recommended_remove', kind=kind, simkl_id=simkl_id, title=title)})"))
 
-    add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx)
+    add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx, cast=cast or None)
 
 
 def show_recommended_shows():
     xbmcplugin.setPluginCategory(HANDLE, "Recommended Shows")
+    xbmcplugin.setContent(HANDLE, "tvshows")
     data = recommendations.load()
     shows = (data or {}).get("shows") or []
     if not shows:
@@ -804,6 +930,7 @@ def show_recommended_shows():
 
 def show_recommended_movies():
     xbmcplugin.setPluginCategory(HANDLE, "Recommended Movies")
+    xbmcplugin.setContent(HANDLE, "movies")
     data = recommendations.load()
     movies = (data or {}).get("movies") or []
     if not movies:
@@ -842,6 +969,37 @@ def recommended_remove(params):
 
     recommendations.remove_item(kind, simkl_id)
     xbmcgui.Dialog().notification("WhatsOnStreamer", f"Dropped: {title}", xbmcgui.NOTIFICATION_INFO, 1500)
+
+
+def recommended_watched(params):
+    """Context-menu 'Mark as Watched' on a Recommended item: sets it 'completed'
+    in SIMKL (SimklApi.add_to_completed - for shows this marks every aired
+    episode watched), so it counts as real watch history for future
+    recommendation seeding rather than being excluded like a drop. Removes it
+    from the cached Recommended list immediately, same as recommended_remove()."""
+    kind = params.get("kind", "show")
+    title = params.get("title", "this title")
+    try:
+        simkl_id = int(params.get("simkl_id", ""))
+    except (TypeError, ValueError):
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Missing SIMKL id", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    addon = xbmcaddon.Addon()
+    api = SimklApi(addon)
+    if not api.is_authorized():
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Not authorized with SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    try:
+        api.add_to_completed(kind, simkl_id)
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] add_to_completed failed for {title}: {e}", xbmc.LOGERROR)
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Failed to mark as watched in SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    recommendations.remove_item(kind, simkl_id)
+    xbmcgui.Dialog().notification("WhatsOnStreamer", f"Marked watched: {title}", xbmcgui.NOTIFICATION_INFO, 1500)
 
 
 def recommended_watchlist(params):
@@ -1832,6 +1990,39 @@ def play_iptv(params):
 
 
 # --------------------------
+# Context-menu "Play" shortcut from a show list (New Episodes / Upcoming) -
+# same local -> IPTV -> Homelander priority play_movie_default() uses for
+# movies, jumping straight to the next episode rather than navigating into
+# the season/episode screen first.
+# --------------------------
+def play_episode_default(params):
+    title = params.get("title", "")
+    try:
+        season = int(params.get("season", 0))
+        episode = int(params.get("episode", 0))
+    except (ValueError, TypeError):
+        return
+
+    try:
+        lf_api = LocalMediaApi()
+        if lf_api.is_configured() and lf_api.find_episode(title, season, episode):
+            play_local(params)
+            return
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] Local episode lookup failed: {e}", xbmc.LOGERROR)
+
+    try:
+        iptv_api = IptvApi()
+        if iptv_api.is_configured() and episode in iptv_api.get_available_episodes(title, season):
+            play_iptv(params)
+            return
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] IPTV episode availability check failed: {e}", xbmc.LOGERROR)
+
+    open_homelander({**params, "next": f"S{season:02d}E{episode:02d}"})
+
+
+# --------------------------
 # Local file playback
 # --------------------------
 def play_local(params):
@@ -1925,6 +2116,33 @@ def play_local_movie(params):
     li.setInfo("video", {"title": title})
     li.setProperty("IsPlayable", "true")
     xbmc.Player().play(file_path, li)
+
+
+# --------------------------
+# Context-menu "Play" shortcut from a movie list - same local -> IPTV ->
+# Homelander priority show_movie_item() uses, just skipping straight to
+# playback instead of navigating into the single-item screen first.
+# --------------------------
+def play_movie_default(params):
+    title = params.get("title", "")
+
+    try:
+        lf_api = LocalMediaApi()
+        if lf_api.is_movies_configured() and lf_api.find_movie(title):
+            play_local_movie(params)
+            return
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] Local movie lookup failed: {e}", xbmc.LOGERROR)
+
+    try:
+        iptv_api = IptvApi()
+        if iptv_api.is_vod_configured() and iptv_api.is_movie_available(title):
+            play_iptv_movie(params)
+            return
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] IPTV movie availability check failed: {e}", xbmc.LOGERROR)
+
+    open_homelander({**params, "media_type": "movie"})
 
 
 # --------------------------
@@ -2062,6 +2280,8 @@ def router():
         recommended_remove(params); xbmc.executebuiltin('Container.Refresh')
     elif action == "recommended_watchlist":
         recommended_watchlist(params); xbmc.executebuiltin('Container.Refresh')
+    elif action == "recommended_watched":
+        recommended_watched(params); xbmc.executebuiltin('Container.Refresh')
     elif action == "search_menu":
         show_search_menu()
     elif action == "search_series":
@@ -2098,12 +2318,16 @@ def router():
         play_local(params)
     elif action == "play_iptv":
         play_iptv(params)
+    elif action == "play_episode_default":
+        play_episode_default(params)
     elif action == "play_alldebrid_movie":
         play_alldebrid_movie(params)
     elif action == "play_local_movie":
         play_local_movie(params)
     elif action == "play_iptv_movie":
         play_iptv_movie(params)
+    elif action == "play_movie_default":
+        play_movie_default(params)
     elif action.startswith("show_"):
         show_show_info(action)
     else:

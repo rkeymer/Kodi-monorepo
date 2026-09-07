@@ -25,7 +25,7 @@ class TmdbApi:
         cached = _cache_movie.get(key)
         if cached is not None:
             return cached
-        data = self._get(f"/movie/{int(tmdb_movie_id)}", params={"language": language})
+        data = self._get(f"/movie/{int(tmdb_movie_id)}", params={"language": language, "append_to_response": "credits"})
         _cache_movie.set(key, data)
         return data
 
@@ -58,7 +58,7 @@ class TmdbApi:
         cached = _cache_tv.get(key)
         if cached is not None:
             return cached
-        data = self._get(f"/tv/{int(tmdb_tv_id)}", params={"language": language})
+        data = self._get(f"/tv/{int(tmdb_tv_id)}", params={"language": language, "append_to_response": "credits"})
         _cache_tv.set(key, data)
         return data
 

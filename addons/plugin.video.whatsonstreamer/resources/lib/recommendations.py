@@ -7,7 +7,7 @@ from resources.lib.cache import DiskCache
 _cache_recs = DiskCache("whatsupnext_recs", ttl=30 * 86400)
 _KEY = "current"
 
-MAX_ITEMS = 20
+MAX_ITEMS = 50
 _MAX_BECAUSE = 3
 
 ENGLISH_LANGUAGE = "en"
