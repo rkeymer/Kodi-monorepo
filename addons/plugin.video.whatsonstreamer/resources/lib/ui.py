@@ -61,4 +61,15 @@ def add_item(label, url="", info=None, art=None, is_folder=False, context_menu=N
 
 
 def end_dir():
+    # sys.argv[0]+[2] is this screen's own invocation URL - captured here (not
+    # per-screen) so every listing gets a trailing "Log Bug" item for free,
+    # with the exact screen it was clicked from recorded automatically.
+    context = sys.argv[0] + (sys.argv[2] if len(sys.argv) > 2 else "")
+    li = xbmcgui.ListItem(label="[COLOR grey]⚑ Log Bug[/COLOR]")
+    xbmcplugin.addDirectoryItem(
+        handle=HANDLE,
+        url=build_url(action="log_bug", context=context),
+        listitem=li,
+        isFolder=False,
+    )
     xbmcplugin.endOfDirectory(HANDLE)

@@ -4,6 +4,7 @@ import xbmc
 import xbmcgui
 import xbmcplugin
 import xbmcaddon
+import xbmcvfs
 from datetime import datetime, timezone, date
 
 from resources.lib.simkl_api import SimklApi
@@ -31,6 +32,43 @@ HANDLE = int(sys.argv[1])
 # --------------------------
 def log(msg):
     xbmc.log(f"[WhatsOnStreamer] {msg}", xbmc.LOGINFO)
+
+
+def log_bug(params):
+    """The 'Log Bug' item every screen gets for free (see ui.py's end_dir()).
+    Free-text note field for jotting down something wrong on the spot (e.g.
+    a wrong episode selection) to troubleshoot later, with the exact screen
+    it was clicked from and a timestamp recorded automatically."""
+    context = params.get("context", "")
+    text = xbmcgui.Dialog().input("Log Bug - describe the issue", type=xbmcgui.INPUT_ALPHANUM)
+    if not text or not text.strip():
+        return
+
+    profile = xbmcvfs.translatePath(ADDON.getAddonInfo("profile"))
+    if not xbmcvfs.exists(profile):
+        xbmcvfs.mkdirs(profile)
+    log_path = profile.rstrip("/\\") + "/bug_log.txt"
+
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = f"--- {ts} ---\nScreen: {context}\n{text.strip()}\n\n"
+    try:
+        # xbmcvfs.File's 'a' (append) mode isn't reliably supported - confirmed
+        # live: it silently no-ops instead of raising, so read-then-rewrite the
+        # whole file instead, which only relies on the well-supported 'r'/'w'.
+        existing = ""
+        if xbmcvfs.exists(log_path):
+            rf = xbmcvfs.File(log_path, 'r')
+            existing = rf.read()
+            rf.close()
+        wf = xbmcvfs.File(log_path, 'w')
+        wf.write(existing + entry)
+        wf.close()
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] log_bug write failed: {e}", xbmc.LOGERROR)
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Failed to save bug note", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    xbmcgui.Dialog().notification("WhatsOnStreamer", "Bug logged", xbmcgui.NOTIFICATION_INFO, 1500)
 
 
 def parse_sxxexx(s):
@@ -2358,6 +2396,8 @@ def router():
         show_help()
     elif action == "auth":
         show_auth()
+    elif action == "log_bug":
+        log_bug(params)
     elif action == "show_seasons":
         show_seasons(params)
     elif action == "show_season_episodes":
