@@ -216,16 +216,49 @@ def _do_update() -> bool:
         return False
 
 
+UPDATE_FAILURE_COOLDOWN_THRESHOLD = 3
+UPDATE_FAILURE_COOLDOWN_SECONDS = 2 * 3600
+
+
+def _record_update_result(st: dict, ok: bool):
+    """Tracks consecutive auto-update failures. After
+    UPDATE_FAILURE_COOLDOWN_THRESHOLD in a row, sets a cooldown that
+    _update_in_cooldown() below makes the background loop respect - without
+    this, a downed provider gets retried every single ~60s loop tick
+    forever, since a failed _do_update() never advances last_auto_update
+    and the interval gate stays permanently "overdue". Does not save state
+    itself - the caller saves once after also updating its own fields."""
+    if ok:
+        st['update_failures'] = 0
+        st['update_cooldown_until'] = 0
+        return
+    failures = int(st.get('update_failures', 0) or 0) + 1
+    st['update_failures'] = failures
+    if failures >= UPDATE_FAILURE_COOLDOWN_THRESHOLD:
+        cooldown_until = int(time.time()) + UPDATE_FAILURE_COOLDOWN_SECONDS
+        st['update_cooldown_until'] = cooldown_until
+        log.warn('Auto-update: %d consecutive failures - cooling down until %s'
+                  % (failures, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(cooldown_until))))
+
+
+def _update_in_cooldown(st: dict) -> bool:
+    return int(st.get('update_cooldown_until', 0) or 0) > int(time.time())
+
+
 def run_manual() -> bool:
-    """Run a single update immediately (invoked from the root Tools menu)."""
+    """Run a single update immediately (invoked from the root Tools menu).
+    Always attempts even mid-cooldown - this is an explicit user request,
+    not the background loop - but a failure still counts toward the
+    cooldown like any other attempt."""
     try:
         st = _load_state()
         ok = _do_update()
+        _record_update_result(st, ok)
         if ok:
             now_ts = int(time.time())
             st['last_manual_update'] = now_ts
             st['last_auto_update'] = now_ts
-            _save_state(st)
+        _save_state(st)
         return ok
     except Exception as e:
         log.error('Manual update failed: %s' % repr(e))
@@ -580,16 +613,20 @@ def run_loop():
                 mode = _get('livetv_auto_update_mode', '1')  # 0=daily, 1=interval
                 st = _load_state()
 
-                if str(mode) == '0':
+                if _update_in_cooldown(st):
+                    pass  # 3+ consecutive failures - skip this tick, see _record_update_result()
+                elif str(mode) == '0':
                     hh, mm = _parse_hhmm(_get('livetv_auto_update_time', '02:00'))
                     lt = time.localtime(time.time())
                     today = f"{lt.tm_year:04d}-{lt.tm_mon:02d}-{lt.tm_mday:02d}"
                     last = st.get('last_service_update_date', '')
                     if last != today and (lt.tm_hour, lt.tm_min) >= (hh, mm):
-                        if _do_update():
+                        ok = _do_update()
+                        _record_update_result(st, ok)
+                        if ok:
                             st['last_service_update_date'] = today
                             st['last_auto_update'] = int(time.time())
-                            _save_state(st)
+                        _save_state(st)
                 else:
                     interval_h = _get_int('livetv_auto_update_interval_hours', 6)
                     try:
@@ -601,9 +638,11 @@ def run_loop():
                     now_ts = int(time.time())
                     last_ts = int(st.get('last_auto_update', 0) or 0)
                     if last_ts <= 0 or (now_ts - last_ts) >= (interval_h * 3600):
-                        if _do_update():
+                        ok = _do_update()
+                        _record_update_result(st, ok)
+                        if ok:
                             st['last_auto_update'] = now_ts
-                            _save_state(st)
+                        _save_state(st)
 
         except Exception as e:
             log.warn('Service loop error: %s' % repr(e))

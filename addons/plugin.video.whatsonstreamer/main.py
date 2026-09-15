@@ -15,6 +15,7 @@ from resources.lib.iptv_api import IptvApi
 from resources.lib.iptv_http import get_ua as get_iptv_ua
 from resources.lib.ui import get_params, build_url, add_folder, add_item, end_dir
 from resources.lib import livetv
+from resources.lib import iptv_profiles
 from resources.lib import settings_reset
 from resources.lib import legacy_import
 from resources.lib import recommendations
@@ -317,6 +318,7 @@ def show_tools_menu():
     add_item("Live TV: Run auto-update now", url=build_url(action="svc_update"))
     add_item("Live TV: Test connection", url=build_url(action="livetv_test"))
     add_item("Live TV: Test local files", url=build_url(action="livetv_test_local"))
+    add_item("Live TV: Manage IPTV Profiles", url=build_url(action="iptv_manage_profiles"))
     add_item("WhatsUpNext: Warm episode cache now", url=build_url(action="svc_warm_whatsupnext"))
     add_item("Import settings from WhatsOnNow / WhatsUpNext", url=build_url(action="settings_import"))
     add_item("Reset settings to defaults", url=build_url(action="settings_reset"))
@@ -2309,6 +2311,8 @@ def router():
         livetv.list_root()
     elif action == "livetv_build_info":
         livetv.show_build_info()
+    elif action == "iptv_manage_profiles":
+        iptv_profiles.manage()
     elif action == "livetv_test":
         livetv.test_connection()
     elif action == "livetv_test_local":
