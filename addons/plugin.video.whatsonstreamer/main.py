@@ -480,7 +480,14 @@ def show_new_episodes():
             if rating_parts:
                 plot = (plot + "\n\n" if plot else "") + "  ·  ".join(rating_parts)
 
-            info = {"title": title, "tvshowtitle": title}
+            # Kodi's list view renders ListItem.Title (from the video info tag)
+            # in preference to ListItem.Label whenever a video info tag is set -
+            # confirmed 2026-09-16 after 0.2.46 started registering a sort method,
+            # which made Kodi treat this as a proper video list instead of a
+            # generic file list. Title must carry the same "X new - SxxExx
+            # (date)" suffix as label, or that text silently disappears in List
+            # view even though the plugin directory listing (and Label) has it.
+            info = {"title": label, "tvshowtitle": title}
             if plot:
                 info["plot"] = plot
             if simkl_rating:
@@ -627,7 +634,11 @@ def show_upcoming():
                 except Exception as e:
                     xbmc.log(f"[WhatsOnStreamer] TMDB tv_details failed for {title}: {e}", xbmc.LOGERROR)
 
-            info = {"title": title, "tvshowtitle": title}
+            # See show_new_episodes() for why this must be `label`, not the
+            # bare title - Kodi's list view prefers ListItem.Title over Label
+            # once a video info tag is set, silently dropping the "X days -
+            # (date)" suffix otherwise.
+            info = {"title": label, "tvshowtitle": title}
             if overview:
                 info["plot"] = overview
             if vote_average:
