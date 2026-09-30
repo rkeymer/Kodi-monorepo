@@ -19,6 +19,7 @@ from resources.lib import iptv_profiles
 from resources.lib import settings_reset
 from resources.lib import legacy_import
 from resources.lib import recommendations
+from resources.lib import genres as genre_lists
 
 
 ADDON = xbmcaddon.Addon()
@@ -305,7 +306,7 @@ def show_whatsupnext_menu():
     add_folder("New Episodes", "new", icon=f"{MEDIA_PATH}/new.png")
     add_folder("Upcoming Episodes", "upcoming", icon=f"{MEDIA_PATH}/upcoming.png")
     add_folder("Movies", "movies", icon=f"{MEDIA_PATH}/movies.png")
-    add_folder("Recommended", "recommended_menu", icon=f"{MEDIA_PATH}/favourites.png")
+    add_folder("Add Shows and Movies", "add_content_menu", icon=f"{MEDIA_PATH}/favourites.png")
     add_folder("AllDebrid", "alldebrid_menu", icon=f"{MEDIA_PATH}/alldebrid.png")
     add_folder("Search", "search_menu", icon=f"{MEDIA_PATH}/search.png")
     end_dir()
@@ -862,10 +863,221 @@ def show_movies():
         end_dir()
 
 
-def show_recommended_menu():
-    xbmcplugin.setPluginCategory(HANDLE, "Recommended")
-    add_folder("Shows", "recommended_shows", icon=f"{MEDIA_PATH}/new.png")
-    add_folder("Movies", "recommended_movies", icon=f"{MEDIA_PATH}/movies.png")
+def show_add_content_menu():
+    xbmcplugin.setPluginCategory(HANDLE, "Add Shows and Movies")
+    add_folder("Movies", "add_movies_menu", icon=f"{MEDIA_PATH}/movies.png")
+    add_folder("Series", "add_series_menu", icon=f"{MEDIA_PATH}/new.png")
+    end_dir()
+
+
+def show_add_movies_menu():
+    xbmcplugin.setPluginCategory(HANDLE, "Add Movies")
+    add_folder("Recommended", "recommended_movies", icon=f"{MEDIA_PATH}/favourites.png")
+    add_folder("Genres", "movie_genres_menu", icon=f"{MEDIA_PATH}/groups.png")
+    end_dir()
+
+
+def show_add_series_menu():
+    xbmcplugin.setPluginCategory(HANDLE, "Add Series")
+    add_folder("Recommended", "recommended_shows", icon=f"{MEDIA_PATH}/favourites.png")
+    add_folder("Genres", "tv_genres_menu", icon=f"{MEDIA_PATH}/groups.png")
+    end_dir()
+
+
+def show_movie_genres_menu():
+    xbmcplugin.setPluginCategory(HANDLE, "Genres")
+    for name, genre_id in genre_lists.MOVIE_GENRES:
+        url = build_url(action="movie_genre_titles", genre_id=genre_id, genre_name=name)
+        add_item(name, url=url, is_folder=True, art={"icon": f"{MEDIA_PATH}/movies.png"})
+    end_dir()
+
+
+def show_tv_genres_menu():
+    xbmcplugin.setPluginCategory(HANDLE, "Genres")
+    for name, genre_id in genre_lists.TV_GENRES:
+        url = build_url(action="tv_genre_titles", genre_id=genre_id, genre_name=name)
+        add_item(name, url=url, is_folder=True, art={"icon": f"{MEDIA_PATH}/new.png"})
+    end_dir()
+
+
+def _discover_top_rated(tmdb, kind: str, genre_id: int, limit=100, exclude_tmdb_ids=None):
+    """Merges TMDB discover pages (20 results/page, so enough pages for `limit`
+    plus one buffer page) for one genre - already sorted top-rated first
+    per-page by the API - into a single de-duplicated, re-sorted list. Multiple
+    pages are pulled both because a single page can't be trusted to stay sorted
+    across the merge boundary, and because exclude_tmdb_ids can otherwise leave
+    fewer than `limit` results once already-tracked titles are filtered out.
+
+    Excludes Animation from every other genre (e.g. an animated sci-fi show
+    is tagged with both Animation and Sci-Fi & Fantasy on TMDB) so it only
+    ever shows up under its own Animation bucket, not doubled up elsewhere.
+
+    `exclude_tmdb_ids` drops anything already in the account's SIMKL lists
+    (see SimklApi.known_tmdb_ids()) so Genre browsing only ever suggests
+    titles that aren't already being watched/tracked."""
+    fetch = tmdb.discover_movies if kind == "movie" else tmdb.discover_tv
+    without_genres = None if genre_id == genre_lists.ANIMATION_GENRE_ID else genre_lists.ANIMATION_GENRE_ID
+    exclude_tmdb_ids = exclude_tmdb_ids or set()
+    results = []
+    seen_ids = set()
+    pages_needed = -(-limit // 20) + 1  # ceil(limit / 20) plus one buffer page
+    for page in range(1, pages_needed + 1):
+        data = _safe_tmdb(lambda p=page: fetch(genre_id, page=p, without_genres=without_genres), f"discover {kind} genre={genre_id} page={page}")
+        for r in (data or {}).get("results") or []:
+            rid = r.get("id")
+            if not rid or rid in seen_ids or str(rid) in exclude_tmdb_ids:
+                continue
+            seen_ids.add(rid)
+            results.append(r)
+    results.sort(key=lambda r: r.get("vote_average") or 0.0, reverse=True)
+    return results[:limit]
+
+
+def _plot_with_rating_header(overview, year, rating, votes, source="TMDB"):
+    """Prepends a 'Year  •  <source> rating' line to the overview so it's
+    visible in the plot/description panel itself, rather than relying on the
+    skin to surface the separate year/rating info fields. Used by both
+    Genre-browse items (source='TMDB') and Recommended items (source='SIMKL')."""
+    bits = []
+    if year:
+        bits.append(str(year))
+    if rating:
+        votes_str = f"  ({votes:,} votes)" if votes else ""
+        bits.append(f"{source} {rating:.1f}/10{votes_str}")
+    header = "  •  ".join(bits)
+    if header and overview:
+        return f"{header}\n\n{overview}"
+    return header or overview
+
+
+def _safe_tmdb(fn, label):
+    try:
+        return fn()
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer][TMDB] {label} failed: {e}", xbmc.LOGERROR)
+        return None
+
+
+def show_movie_genre_titles(params):
+    genre_id = params.get("genre_id", "")
+    genre_name = params.get("genre_name", "Genre")
+    xbmcplugin.setPluginCategory(HANDLE, f"{genre_name} Movies")
+    xbmcplugin.setContent(HANDLE, "movies")
+    xbmcplugin.addSortMethod(HANDLE, xbmcplugin.SORT_METHOD_UNSORTED)
+
+    addon = xbmcaddon.Addon()
+    tmdb = TmdbApi(addon)
+    if not tmdb.is_configured() or not genre_id:
+        add_item("TMDB isn't configured — set a TMDB API key in add-on settings.")
+        end_dir()
+        return
+
+    known_ids = SimklApi(addon).known_tmdb_ids("movie")
+    show_posters = addon.getSettingBool("show_posters")
+    for r in _discover_top_rated(tmdb, "movie", int(genre_id), exclude_tmdb_ids=known_ids):
+        title = r.get("title") or r.get("original_title") or "Unknown title"
+        year = (r.get("release_date") or "")[:4]
+        tmdb_id = r.get("id")
+        overview = r.get("overview") or ""
+        vote_average = r.get("vote_average") or 0.0
+        vote_count = r.get("vote_count") or 0
+
+        label = f"{title} ({year})" if year else title
+
+        art = None
+        if show_posters:
+            purl = tmdb_poster_url(r.get("poster_path"))
+            if purl:
+                art = {"thumb": purl, "poster": purl, "icon": purl}
+
+        info = {"title": title, "genre": genre_name}
+        if year:
+            info["year"] = year
+        plot = _plot_with_rating_header(overview, year, vote_average, vote_count, source="TMDB")
+        if plot:
+            info["plot"] = plot
+        if vote_average:
+            info["rating"] = float(vote_average)
+        if vote_count:
+            info["votes"] = str(vote_count)
+        info["trailer"] = build_url(action="play_trailer", title=title, tmdb_id=str(tmdb_id), kind="movie")
+
+        url = build_url(action="show_movie", title=title, imdb="", tmdb=str(tmdb_id), year=year, simkl_poster="", simkl_id="")
+
+        ctx = [
+            ("Play", f"RunPlugin({build_url(action='play_movie_default', title=title, imdb='', tmdb=str(tmdb_id))})"),
+            ("Movie Information", "Action(Info)"),
+            ("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, tmdb_id=str(tmdb_id), kind='movie')})"),
+            ("Add to Watchlist", f"RunPlugin({build_url(action='recommended_watchlist', kind='movie', tmdb_id=str(tmdb_id), title=title)})"),
+            ("Mark as Watched", f"RunPlugin({build_url(action='recommended_watched', kind='movie', tmdb_id=str(tmdb_id), title=title)})"),
+            ("Remove Movie", f"RunPlugin({build_url(action='recommended_remove', kind='movie', tmdb_id=str(tmdb_id), title=title)})"),
+        ]
+
+        add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx)
+
+    end_dir()
+
+
+def show_tv_genre_titles(params):
+    genre_id = params.get("genre_id", "")
+    genre_name = params.get("genre_name", "Genre")
+    xbmcplugin.setPluginCategory(HANDLE, f"{genre_name} Series")
+    xbmcplugin.setContent(HANDLE, "tvshows")
+    xbmcplugin.addSortMethod(HANDLE, xbmcplugin.SORT_METHOD_UNSORTED)
+
+    addon = xbmcaddon.Addon()
+    tmdb = TmdbApi(addon)
+    if not tmdb.is_configured() or not genre_id:
+        add_item("TMDB isn't configured — set a TMDB API key in add-on settings.")
+        end_dir()
+        return
+
+    known_ids = SimklApi(addon).known_tmdb_ids("show")
+    show_posters = addon.getSettingBool("show_posters")
+    for r in _discover_top_rated(tmdb, "tv", int(genre_id), exclude_tmdb_ids=known_ids):
+        title = r.get("name") or r.get("original_name") or "Unknown title"
+        year = (r.get("first_air_date") or "")[:4]
+        tmdb_id = r.get("id")
+        overview = r.get("overview") or ""
+        vote_average = r.get("vote_average") or 0.0
+        vote_count = r.get("vote_count") or 0
+
+        label = f"{title} ({year})" if year else title
+
+        art = None
+        if show_posters:
+            purl = tmdb_poster_url(r.get("poster_path"))
+            if purl:
+                art = {"thumb": purl, "poster": purl, "icon": purl}
+
+        info = {"title": title, "genre": genre_name}
+        if year:
+            info["year"] = year
+        plot = _plot_with_rating_header(overview, year, vote_average, vote_count, source="TMDB")
+        if plot:
+            info["plot"] = plot
+        if vote_average:
+            info["rating"] = float(vote_average)
+        if vote_count:
+            info["votes"] = str(vote_count)
+        info["trailer"] = build_url(action="play_trailer", title=title, tmdb_id=str(tmdb_id), kind="show")
+
+        url = build_url(
+            action="show_seasons",
+            title=title, imdb="", tmdb=str(tmdb_id), year=year, next="",
+            simkl_poster="", simkl_id="",
+        )
+
+        ctx = [
+            ("Show Information", "Action(Info)"),
+            ("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, tmdb_id=str(tmdb_id), kind='show')})"),
+            ("Add to Watchlist", f"RunPlugin({build_url(action='recommended_watchlist', kind='show', tmdb_id=str(tmdb_id), title=title)})"),
+            ("Mark Show as Watched", f"RunPlugin({build_url(action='recommended_watched', kind='show', tmdb_id=str(tmdb_id), title=title)})"),
+            ("Remove Show", f"RunPlugin({build_url(action='recommended_remove', kind='show', tmdb_id=str(tmdb_id), title=title)})"),
+        ]
+
+        add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx)
+
     end_dir()
 
 
@@ -911,10 +1123,7 @@ def _add_recommended_item(item, kind):
     if because:
         hint = f"Because you watched: {', '.join(because)}"
         plot = (plot + "\n\n" if plot else "") + hint
-    if rating:
-        votes_str = f"  ({votes:,})" if votes else ""
-        rating_line = f"SIMKL  {rating:.1f}/10{votes_str}"
-        plot = (plot + "\n\n" if plot else "") + rating_line
+    plot = _plot_with_rating_header(plot, year, rating, votes, source="SIMKL")
 
     info = {"title": title}
     if plot:
@@ -985,22 +1194,45 @@ def show_recommended_movies():
     end_dir()
 
 
+def _resolve_simkl_id(params, api):
+    """Returns an int SIMKL id for a context-menu action. Uses params['simkl_id']
+    when the item already carries one (Recommended items do); otherwise resolves
+    it on the spot from params['tmdb_id'] + params['kind'] via
+    SimklApi.find_id_by_tmdb() (Genre-browse items, which come straight from
+    TMDB, only have a tmdb_id until an action like this needs a SIMKL one).
+    Returns None if neither is available or the lookup finds nothing."""
+    raw = params.get("simkl_id", "")
+    if raw:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    tmdb_id = params.get("tmdb_id", "")
+    if not tmdb_id:
+        return None
+    try:
+        return api.find_id_by_tmdb(params.get("kind", "show"), int(tmdb_id))
+    except (TypeError, ValueError):
+        return None
+
+
 def recommended_remove(params):
-    """Context-menu 'Remove' on a Recommended item: marks it 'dropped' in SIMKL
-    (so it won't be suggested again - see recommendations.build()'s dropped-list
-    exclusion) and drops it from the cached list so it disappears immediately."""
+    """Context-menu 'Remove' on a Recommended or Genre item: marks it 'dropped'
+    in SIMKL (so it won't be suggested again - see recommendations.build()'s
+    dropped-list exclusion) and drops it from the cached Recommended list if it
+    was in one (a no-op for Genre items, which aren't cached locally)."""
     kind = params.get("kind", "show")
     title = params.get("title", "this title")
-    try:
-        simkl_id = int(params.get("simkl_id", ""))
-    except (TypeError, ValueError):
-        xbmcgui.Dialog().notification("WhatsOnStreamer", "Missing SIMKL id", xbmcgui.NOTIFICATION_ERROR)
-        return
 
     addon = xbmcaddon.Addon()
     api = SimklApi(addon)
     if not api.is_authorized():
         xbmcgui.Dialog().notification("WhatsOnStreamer", "Not authorized with SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    simkl_id = _resolve_simkl_id(params, api)
+    if not simkl_id:
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Couldn't match this title in SIMKL", xbmcgui.NOTIFICATION_ERROR)
         return
 
     try:
@@ -1022,16 +1254,16 @@ def recommended_watched(params):
     Recommended list immediately, same as recommended_remove()."""
     kind = params.get("kind", "show")
     title = params.get("title", "this title")
-    try:
-        simkl_id = int(params.get("simkl_id", ""))
-    except (TypeError, ValueError):
-        xbmcgui.Dialog().notification("WhatsOnStreamer", "Missing SIMKL id", xbmcgui.NOTIFICATION_ERROR)
-        return
 
     addon = xbmcaddon.Addon()
     api = SimklApi(addon)
     if not api.is_authorized():
         xbmcgui.Dialog().notification("WhatsOnStreamer", "Not authorized with SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    simkl_id = _resolve_simkl_id(params, api)
+    if not simkl_id:
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Couldn't match this title in SIMKL", xbmcgui.NOTIFICATION_ERROR)
         return
 
     try:
@@ -1114,16 +1346,16 @@ def recommended_watchlist(params):
     Recommended list immediately, same as recommended_remove()."""
     kind = params.get("kind", "show")
     title = params.get("title", "this title")
-    try:
-        simkl_id = int(params.get("simkl_id", ""))
-    except (TypeError, ValueError):
-        xbmcgui.Dialog().notification("WhatsOnStreamer", "Missing SIMKL id", xbmcgui.NOTIFICATION_ERROR)
-        return
 
     addon = xbmcaddon.Addon()
     api = SimklApi(addon)
     if not api.is_authorized():
         xbmcgui.Dialog().notification("WhatsOnStreamer", "Not authorized with SIMKL", xbmcgui.NOTIFICATION_ERROR)
+        return
+
+    simkl_id = _resolve_simkl_id(params, api)
+    if not simkl_id:
+        xbmcgui.Dialog().notification("WhatsOnStreamer", "Couldn't match this title in SIMKL", xbmcgui.NOTIFICATION_ERROR)
         return
 
     try:
@@ -2263,14 +2495,14 @@ def play_movie_default(params):
 # --------------------------
 def play_trailer(params):
     title     = params.get("title", "")
-    simkl_id  = params.get("simkl_id", "")
     kind      = params.get("kind", "show")
     addon     = xbmcaddon.Addon()
+    api       = SimklApi(addon)
+    simkl_id  = _resolve_simkl_id(params, api)
     youtube_id = None
 
     if simkl_id:
         try:
-            api = SimklApi(addon)
             details = api.get_movie_details_full(int(simkl_id)) if kind == "movie" else api.get_show_details_full(int(simkl_id))
             # SIMKL extended=full returns trailer as a bare YouTube video ID string
             youtube_id = details.get("trailer") or details.get("youtube")
@@ -2385,8 +2617,20 @@ def router():
         show_upcoming()
     elif action == "movies":
         show_movies()
-    elif action == "recommended_menu":
-        show_recommended_menu()
+    elif action == "add_content_menu":
+        show_add_content_menu()
+    elif action == "add_movies_menu":
+        show_add_movies_menu()
+    elif action == "add_series_menu":
+        show_add_series_menu()
+    elif action == "movie_genres_menu":
+        show_movie_genres_menu()
+    elif action == "tv_genres_menu":
+        show_tv_genres_menu()
+    elif action == "movie_genre_titles":
+        show_movie_genre_titles(params)
+    elif action == "tv_genre_titles":
+        show_tv_genre_titles(params)
     elif action == "recommended_shows":
         show_recommended_shows()
     elif action == "recommended_movies":

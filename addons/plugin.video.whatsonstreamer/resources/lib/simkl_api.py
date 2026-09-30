@@ -11,6 +11,8 @@ API_BASE = "https://api.simkl.com"
 _cache_show = DiskCache("simkl_show", ttl=7 * 86400)  # 7 days — trailer/ids rarely change
 _cache_movie = DiskCache("simkl_movie", ttl=7 * 86400)  # 7 days — mirrors _cache_show
 _cache_watching = DiskCache("simkl_watching", ttl=120)  # 2 min — account-wide, hit on every season screen
+_cache_id_lookup = DiskCache("simkl_id_by_tmdb", ttl=30 * 86400)  # 30 days — a tmdb->simkl mapping never changes
+_cache_known_tmdb = DiskCache("simkl_known_tmdb", ttl=120)  # 2 min — mirrors _watching_and_completed's cache
 
 class SimklApi:
     def __init__(self, addon):
@@ -255,3 +257,81 @@ class SimklApi:
         'plantowatch' - SIMKL's literal watchlist status."""
         status = "watching" if kind == "show" else "plantowatch"
         return self._set_list_status(kind, simkl_id, status)
+
+    def known_tmdb_ids(self, kind: str) -> set:
+        """TMDB ids for everything already in the account's SIMKL lists for this
+        kind - watching/completed/dropped for shows, completed/plan/dropped for
+        movies (same 'already known' definition recommendations.build() uses to
+        exclude seeds from its own suggestions). Used to keep a show you're mid-
+        season on, already finished, or explicitly dropped from showing up again
+        in Genre browsing as something 'new' to add. Returns an empty set if not
+        authorized, so genre listings just render unfiltered rather than empty."""
+        if not self.is_authorized():
+            return set()
+
+        cached = _cache_known_tmdb.get(kind)
+        if cached is not None:
+            return set(cached)
+
+        ids = set()
+        if kind == "show":
+            fetches = (self.get_watching_shows, self.get_completed_shows, self.get_dropped_shows)
+        else:
+            fetches = (self.get_completed_movies, self.get_plan_movies, self.get_dropped_movies)
+
+        for fetch in fetches:
+            try:
+                data = fetch()
+            except Exception as e:
+                xbmc.log(f"[WhatsOnStreamer][SIMKL] known_tmdb_ids({kind}) fetch failed: {e}", xbmc.LOGWARNING)
+                continue
+
+            if kind == "show":
+                for it in (data or {}).get("shows") or []:
+                    tmdb_id = ((it.get("show") or {}).get("ids") or {}).get("tmdb")
+                    if tmdb_id:
+                        ids.add(str(tmdb_id))
+            else:
+                movies = []
+                if isinstance(data, dict):
+                    for key in ("movies", "items", "data"):
+                        if isinstance(data.get(key), list):
+                            movies = data[key]
+                            break
+                elif isinstance(data, list):
+                    movies = data
+                for it in movies:
+                    if not isinstance(it, dict):
+                        continue
+                    movie = it.get("movie") or it.get("film") or it
+                    if not isinstance(movie, dict):
+                        continue
+                    tmdb_id = (movie.get("ids") or {}).get("tmdb")
+                    if tmdb_id:
+                        ids.add(str(tmdb_id))
+
+        _cache_known_tmdb.set(kind, list(ids))
+        return ids
+
+    def find_id_by_tmdb(self, kind: str, tmdb_id: int):
+        """GET /search/id?tmdb=<id>&type=<movie|tv> - maps a TMDB id to a SIMKL id.
+        Genre-browse items come straight from TMDB discover results and have no
+        SIMKL id of their own; this is called lazily, once, when a context-menu
+        action (watchlist/watched/remove/trailer) actually needs one - never for
+        every item in a listing, which is what caused the old Recommended screens
+        to time out before recommendations.py started pre-baking everything.
+        Returns None if nothing matches or the id can't be resolved."""
+        simkl_type = "movie" if kind == "movie" else "tv"
+        key = f"{simkl_type}:{tmdb_id}"
+        cached = _cache_id_lookup.get(key)
+        if cached is not None:
+            return cached or None
+        try:
+            data = self._get("/search/id", params={"tmdb": int(tmdb_id), "type": simkl_type}, auth=False)
+        except Exception as e:
+            xbmc.log(f"[WhatsOnStreamer][SIMKL] find_id_by_tmdb tmdb={tmdb_id} type={simkl_type} failed: {e}", xbmc.LOGWARNING)
+            return None
+        result = data[0] if isinstance(data, list) and data else {}
+        simkl_id = (result.get("ids") or {}).get("simkl")
+        _cache_id_lookup.set(key, simkl_id or 0)
+        return simkl_id

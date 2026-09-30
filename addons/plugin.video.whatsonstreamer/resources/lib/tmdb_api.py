@@ -9,6 +9,14 @@ TMDB_API_BASE = "https://api.themoviedb.org/3"
 _cache_season = DiskCache("tmdb_season", ttl=86400)  # 24 h — episode lists rarely change
 _cache_tv     = DiskCache("tmdb_tv",     ttl=172800) # 2 days
 _cache_movie  = DiskCache("tmdb_movie",  ttl=86400)  # 24 h
+_cache_discover_movie = DiskCache("tmdb_discover_movie", ttl=172800)  # 2 days — genre charts move slowly
+_cache_discover_tv    = DiskCache("tmdb_discover_tv",    ttl=172800)  # 2 days
+
+# Minimum vote_count for a discover result to count as "top rated" rather than
+# a handful of 10/10 votes on an obscure title. TV titles get far fewer votes
+# than movies on TMDB, hence the lower bar.
+_DISCOVER_MOVIE_MIN_VOTES = 300
+_DISCOVER_TV_MIN_VOTES = 100
 
 
 class TmdbApi:
@@ -95,3 +103,48 @@ class TmdbApi:
     def tv_external_ids(self, tmdb_tv_id: int):
         """GET /tv/{id}/external_ids — returns imdb_id, tvdb_id etc."""
         return self._get(f"/tv/{int(tmdb_tv_id)}/external_ids")
+
+    def discover_movies(self, genre_id: int, page: int = 1, language="en-US", without_genres=None):
+        """GET /discover/movie for one genre, sorted top-rated first (see
+        _DISCOVER_MOVIE_MIN_VOTES for why a vote-count floor is applied).
+        `without_genres` excludes a genre that would otherwise double up with
+        its own dedicated genre bucket (e.g. an animated sci-fi film showing
+        up under both Animation and Science Fiction)."""
+        key = f"{genre_id}:{page}:{language}:{without_genres}"
+        cached = _cache_discover_movie.get(key)
+        if cached is not None:
+            return cached
+        params = {
+            "language": language,
+            "with_genres": genre_id,
+            "with_original_language": "en",
+            "sort_by": "vote_average.desc",
+            "vote_count.gte": _DISCOVER_MOVIE_MIN_VOTES,
+            "page": page,
+        }
+        if without_genres:
+            params["without_genres"] = without_genres
+        data = self._get("/discover/movie", params=params)
+        _cache_discover_movie.set(key, data)
+        return data
+
+    def discover_tv(self, genre_id: int, page: int = 1, language="en-US", without_genres=None):
+        """GET /discover/tv for one genre, sorted top-rated first. See
+        discover_movies() for what `without_genres` is for."""
+        key = f"{genre_id}:{page}:{language}:{without_genres}"
+        cached = _cache_discover_tv.get(key)
+        if cached is not None:
+            return cached
+        params = {
+            "language": language,
+            "with_genres": genre_id,
+            "with_original_language": "en",
+            "sort_by": "vote_average.desc",
+            "vote_count.gte": _DISCOVER_TV_MIN_VOTES,
+            "page": page,
+        }
+        if without_genres:
+            params["without_genres"] = without_genres
+        data = self._get("/discover/tv", params=params)
+        _cache_discover_tv.set(key, data)
+        return data
