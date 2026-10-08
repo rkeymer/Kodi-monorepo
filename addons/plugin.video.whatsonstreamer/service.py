@@ -186,7 +186,9 @@ def _do_update() -> bool:
                             _get('livetv_m3u_type', 'm3u_plus'), _get('livetv_output', 'ts'))
     epg_url = build_epg_url(base, _get('livetv_epg_path', '/xmltv.php'), user, pw)
 
-    log.info('AUTOUPDATE mode=WEB urls m3u=%s epg=%s' % (m3u_url, epg_url))
+    # Never write the account password to kodi.log (logs get pasted into bug reports).
+    _mask = (lambda u: u.replace(pw, '***')) if pw else (lambda u: u)
+    log.info('AUTOUPDATE mode=WEB urls m3u=%s epg=%s' % (_mask(m3u_url), _mask(epg_url)))
     _notify('Auto-update started...', True)
 
     timeout_s = _get_int('livetv_playlist_timeout', 600)

@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import urllib.request
 import xbmc
@@ -28,6 +29,10 @@ class TmdbApi:
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
+    def movie_details_if_cached(self, tmdb_movie_id: int, language="en-US"):
+        """Returns cached movie details without making a network call, or None."""
+        return _cache_movie.get(f"{tmdb_movie_id}:{language}")
+
     def movie_details(self, tmdb_movie_id: int, language="en-US"):
         key = f"{tmdb_movie_id}:{language}"
         cached = _cache_movie.get(key)
@@ -36,6 +41,30 @@ class TmdbApi:
         data = self._get(f"/movie/{int(tmdb_movie_id)}", params={"language": language, "append_to_response": "credits"})
         _cache_movie.set(key, data)
         return data
+
+    def prefetch_details(self, kind, tmdb_ids, language="en-US", workers=8):
+        """Warms the movie/tv details cache (which includes credits) for many ids
+        at once, so a list of ~100 genre titles doesn't make 100 sequential
+        requests. Only the network fetches run in threads; the cache is
+        written once afterwards from the calling thread (DiskCache isn't
+        thread-safe). Failures are skipped - callers fall back to no cast."""
+        movie = kind == "movie"
+        cache = _cache_movie if movie else _cache_tv
+        path = "/movie/{}" if movie else "/tv/{}"
+        missing = [i for i in dict.fromkeys(tmdb_ids) if i and cache.get(f"{i}:{language}") is None]
+        if not missing:
+            return
+
+        def fetch(tid):
+            try:
+                return tid, self._get(path.format(int(tid)), params={"language": language, "append_to_response": "credits"})
+            except Exception as e:
+                xbmc.log(f"[WhatsOnStreamer][TMDB] prefetch {kind} {tid} failed: {e}", xbmc.LOGERROR)
+                return tid, None
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(fetch, missing))
+        cache.set_many({f"{tid}:{language}": data for tid, data in results if data})
 
     def _get(self, path, params=None):
         if not self.api_key:

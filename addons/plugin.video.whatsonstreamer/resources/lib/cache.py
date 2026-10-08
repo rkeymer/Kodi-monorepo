@@ -62,6 +62,16 @@ class DiskCache:
         self._data[str(key)] = {"exp": time.time() + self._ttl, "v": value}
         self._save()
 
+    def set_many(self, items):
+        """Bulk set with a single file write (set() rewrites the whole file each call)."""
+        if not items:
+            return
+        self._load()
+        exp = time.time() + self._ttl
+        for k, v in items.items():
+            self._data[str(k)] = {"exp": exp, "v": v}
+        self._save()
+
     def clear(self):
         self._data = {}
         self._save()

@@ -1,3 +1,5 @@
+import os
+import sqlite3
 import sys
 import urllib.parse
 import xbmc
@@ -183,6 +185,28 @@ def build_homelander_play_url(imdb, tmdb, tvshowtitle, year, season, episode, ep
     return f"plugin://plugin.video.homelander/?{qs}"
 
 
+def _ensure_homelander_search_db():
+    """Homelander's movieSearchterm action runs `DELETE FROM movies` on its
+    search.1.db without creating the table first - only its interactive Search
+    menu does that. On a fresh install (or an empty/reset db, as on dev: a
+    0-byte file) the direct call crashes with 'no such table: movies' and the
+    window opens empty. Create the table up front so our direct hand-off works."""
+    try:
+        path = os.path.join(
+            xbmcvfs.translatePath("special://profile/addon_data/plugin.video.homelander"),
+            "search.1.db",
+        )
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        con = sqlite3.connect(path)
+        try:
+            con.execute("CREATE TABLE IF NOT EXISTS movies (ID Integer PRIMARY KEY AUTOINCREMENT, term)")
+            con.commit()
+        finally:
+            con.close()
+    except Exception as e:
+        xbmc.log(f"[WhatsOnStreamer] Could not prepare Homelander search db: {e}", xbmc.LOGERROR)
+
+
 def open_homelander(params):
     title = params.get("title", "")
     imdb = params.get("imdb", "")
@@ -194,6 +218,7 @@ def open_homelander(params):
     media_type = params.get("media_type", "tv")
 
     if media_type == "movie":
+        _ensure_homelander_search_db()
         name = f"{title} ({year})" if year else title
         homelander_url = (
             "plugin://plugin.video.homelander/?action=movieSearchterm&name="
@@ -838,22 +863,18 @@ def show_movies():
                 # to plugin.video.youtube.
                 info["trailer"] = build_url(action="play_trailer", title=title, simkl_id=simkl_id, kind="movie")
 
-            url = build_url(
-                action="show_movie",
-                title=title, imdb=imdb_id, tmdb=str(tmdb_id), year=year,
-                simkl_poster=poster_path or "", simkl_id=str(simkl_id),
-            )
+            url = _movie_play_url(title, imdb_id, tmdb_id, year)
 
             ctx = [
-                ("Play", f"RunPlugin({build_url(action='play_movie_default', title=title, imdb=imdb_id, tmdb=str(tmdb_id))})"),
                 ("Movie Information", "Action(Info)"),
+                *_movie_play_menu(title, imdb_id, tmdb_id, year),
             ]
             if simkl_id:
                 ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind='movie')})"))
                 ctx.append(("Mark as Watched", f"RunPlugin({build_url(action='recommended_watched', kind='movie', simkl_id=simkl_id, title=title)})"))
                 ctx.append(("Remove Movie", f"RunPlugin({build_url(action='recommended_remove', kind='movie', simkl_id=simkl_id, title=title)})"))
 
-            add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx, cast=movie_cast or None)
+            add_item(label, url=url, info=info, art=art, is_folder=False, context_menu=ctx, cast=movie_cast or None)
 
         end_dir()
 
@@ -958,6 +979,34 @@ def _safe_tmdb(fn, label):
         return None
 
 
+def _movie_play_url(title, imdb, tmdb, year):
+    """Click target for a movie in any list: play straight away (local -> IPTV ->
+    Homelander, see play_movie_default) instead of opening the one-item
+    show_movie page first."""
+    return build_url(action="play_movie_default", title=title, imdb=imdb, tmdb=str(tmdb), year=year)
+
+
+def _movie_play_menu(title, imdb, tmdb, year):
+    """Right-click 'Play via ...' choices that used to live on the show_movie page."""
+    hl_url = build_url(action="open_homelander", title=title, imdb=imdb, tmdb=str(tmdb), year=year, media_type="movie")
+    return [
+        ("Play via AllDebrid", f"RunPlugin({build_url(action='play_alldebrid_movie', title=title)})"),
+        ("Play via Homelander", f"RunPlugin({hl_url})"),
+        ("Play via IPTV", f"RunPlugin({build_url(action='play_iptv_movie', title=title)})"),
+    ]
+
+
+def _tmdb_cast(details):
+    return [
+        {
+            "name": c["name"],
+            "role": c.get("character") or "",
+            "thumbnail": f"https://image.tmdb.org/t/p/w185{c['profile_path']}" if c.get("profile_path") else "",
+        }
+        for c in ((details or {}).get("credits", {}).get("cast") or [])[:15]
+    ]
+
+
 def show_movie_genre_titles(params):
     genre_id = params.get("genre_id", "")
     genre_name = params.get("genre_name", "Genre")
@@ -974,7 +1023,9 @@ def show_movie_genre_titles(params):
 
     known_ids = SimklApi(addon).known_tmdb_ids("movie")
     show_posters = addon.getSettingBool("show_posters")
-    for r in _discover_top_rated(tmdb, "movie", int(genre_id), exclude_tmdb_ids=known_ids):
+    results = _discover_top_rated(tmdb, "movie", int(genre_id), exclude_tmdb_ids=known_ids)
+    _safe_tmdb(lambda: tmdb.prefetch_details("movie", [r.get("id") for r in results]), "prefetch movie details")
+    for r in results:
         title = r.get("title") or r.get("original_title") or "Unknown title"
         year = (r.get("release_date") or "")[:4]
         tmdb_id = r.get("id")
@@ -1002,18 +1053,19 @@ def show_movie_genre_titles(params):
             info["votes"] = str(vote_count)
         info["trailer"] = build_url(action="play_trailer", title=title, tmdb_id=str(tmdb_id), kind="movie")
 
-        url = build_url(action="show_movie", title=title, imdb="", tmdb=str(tmdb_id), year=year, simkl_poster="", simkl_id="")
+        url = _movie_play_url(title, "", tmdb_id, year)
 
         ctx = [
-            ("Play", f"RunPlugin({build_url(action='play_movie_default', title=title, imdb='', tmdb=str(tmdb_id))})"),
             ("Movie Information", "Action(Info)"),
+            *_movie_play_menu(title, "", tmdb_id, year),
             ("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, tmdb_id=str(tmdb_id), kind='movie')})"),
             ("Add to Watchlist", f"RunPlugin({build_url(action='recommended_watchlist', kind='movie', tmdb_id=str(tmdb_id), title=title)})"),
             ("Mark as Watched", f"RunPlugin({build_url(action='recommended_watched', kind='movie', tmdb_id=str(tmdb_id), title=title)})"),
             ("Remove Movie", f"RunPlugin({build_url(action='recommended_remove', kind='movie', tmdb_id=str(tmdb_id), title=title)})"),
         ]
 
-        add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx)
+        details = tmdb.movie_details_if_cached(tmdb_id) if tmdb_id else None
+        add_item(label, url=url, info=info, art=art, is_folder=False, context_menu=ctx, cast=_tmdb_cast(details) or None)
 
     end_dir()
 
@@ -1034,7 +1086,9 @@ def show_tv_genre_titles(params):
 
     known_ids = SimklApi(addon).known_tmdb_ids("show")
     show_posters = addon.getSettingBool("show_posters")
-    for r in _discover_top_rated(tmdb, "tv", int(genre_id), exclude_tmdb_ids=known_ids):
+    results = _discover_top_rated(tmdb, "tv", int(genre_id), exclude_tmdb_ids=known_ids)
+    _safe_tmdb(lambda: tmdb.prefetch_details("tv", [r.get("id") for r in results]), "prefetch tv details")
+    for r in results:
         title = r.get("name") or r.get("original_name") or "Unknown title"
         year = (r.get("first_air_date") or "")[:4]
         tmdb_id = r.get("id")
@@ -1076,7 +1130,8 @@ def show_tv_genre_titles(params):
             ("Remove Show", f"RunPlugin({build_url(action='recommended_remove', kind='show', tmdb_id=str(tmdb_id), title=title)})"),
         ]
 
-        add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx)
+        details = tmdb.tv_details_if_cached(tmdb_id) if tmdb_id else None
+        add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx, cast=_tmdb_cast(details) or None)
 
     end_dir()
 
@@ -1146,22 +1201,18 @@ def _add_recommended_item(item, kind):
             simkl_poster=poster_path or "", simkl_id=simkl_id,
         )
     else:
-        url = build_url(
-            action="show_movie",
-            title=title, imdb=imdb_id, tmdb=str(tmdb_id), year=year,
-            simkl_poster=poster_path or "", simkl_id=str(simkl_id),
-        )
+        url = _movie_play_url(title, imdb_id, tmdb_id, year)
 
     ctx = []
-    if kind == "movie":
-        ctx.append(("Play", f"RunPlugin({build_url(action='play_movie_default', title=title, imdb=imdb_id, tmdb=str(tmdb_id))})"))
     ctx.append((f"{'Movie' if kind == 'movie' else 'Show'} Information", "Action(Info)"))
     ctx.append(("Watch Trailer", f"RunPlugin({build_url(action='play_trailer', title=title, simkl_id=simkl_id, kind=kind)})"))
     ctx.append(("Add to Watchlist", f"RunPlugin({build_url(action='recommended_watchlist', kind=kind, simkl_id=simkl_id, title=title)})"))
     ctx.append(("Mark as Watched", f"RunPlugin({build_url(action='recommended_watched', kind=kind, simkl_id=simkl_id, title=title)})"))
     ctx.append((f"Remove {'Movie' if kind == 'movie' else 'Show'}", f"RunPlugin({build_url(action='recommended_remove', kind=kind, simkl_id=simkl_id, title=title)})"))
 
-    add_item(label, url=url, info=info, art=art, is_folder=True, context_menu=ctx, cast=cast or None)
+    if kind == "movie":
+        ctx.extend(_movie_play_menu(title, imdb_id, tmdb_id, year))
+    add_item(label, url=url, info=info, art=art, is_folder=(kind == "show"), context_menu=ctx, cast=cast or None)
 
 
 def show_recommended_shows():

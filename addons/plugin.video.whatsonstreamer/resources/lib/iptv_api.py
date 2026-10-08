@@ -66,15 +66,21 @@ class IptvApi:
             cached = self._cache_series.get("all")
             if cached is not None:
                 return cached
+        ok = True
         try:
             series = self._player_api("get_series")
             if not isinstance(series, list):
                 series = []
+                ok = False
         except Exception as e:
+            ok = False
             _log(f"get_series_catalog failed: {e}")
             series = []
         _log(f"Series catalog fetched: {len(series)} series")
-        self._cache_series.set("all", series)
+        # Only cache a good response: a transient 403/DNS failure used to be stored
+        # as an empty catalog for the full TTL, hiding every title from IPTV.
+        if ok:
+            self._cache_series.set("all", series)
         return series
 
     # ------------------------------------------------------------------
@@ -163,15 +169,21 @@ class IptvApi:
             cached = self._cache_vod.get("all")
             if cached is not None:
                 return cached
+        ok = True
         try:
             vod = self._player_api("get_vod_streams")
             if not isinstance(vod, list):
                 vod = []
+                ok = False
         except Exception as e:
+            ok = False
             _log(f"get_vod_catalog failed: {e}")
             vod = []
         _log(f"VOD catalog fetched: {len(vod)} movies")
-        self._cache_vod.set("all", vod)
+        # Only cache a good response: a transient 403/DNS failure used to be stored
+        # as an empty catalog for the full TTL, hiding every title from IPTV.
+        if ok:
+            self._cache_vod.set("all", vod)
         return vod
 
     def find_vod_item(self, movie_title):
